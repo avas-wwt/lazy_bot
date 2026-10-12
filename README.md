@@ -18,7 +18,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 
 | Platform | How | Status |
 |---|---|---|
-| Clockify | REST API (personal API key) | in progress |
+| Clockify | REST API (personal API key) | written, to be tried with a real key |
 | Timesheet Portal (Cloud Decisions UK) | Edge | not written yet |
 | WWT Kronos (UKG) | Edge, WWT Okta sign-in | not written yet |
 | GlobalSource (Deel) | Edge; Deel has no drafts, so entries are only created after your "y" | not written yet |
