@@ -60,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--platform", action="append", help="only this platform (can be repeated)")
     run.add_argument("--mode", choices=SUBMIT_MODES, help="override SUBMIT_MODE for this run")
     run.add_argument("--force", action="store_true", help="redo platforms that state.json says are finished")
+    run.add_argument("--rehearse", action="store_true",
+                     help="fill everything in on the sites but never save or submit (nothing is recorded)")
     run.add_argument("--pause", action="store_true", help="wait for Enter before closing (the scheduled task uses it)")
     run.set_defaults(handler=cmd_run)
 
@@ -121,9 +123,11 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
             run_dir=run_dir,
             only=set(args.platform) if args.platform else None,
             force=args.force,
+            rehearse=args.rehearse,
             open_session=pool.open,
             confirm=ask_yes_no,
             retry_locked=ask_retry,
+            hold=read_line,
         )
         ok = runner.run(weeks)
     log.info("Log: %s", run_dir / "run.log")

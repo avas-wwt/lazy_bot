@@ -25,12 +25,14 @@ class Platform:
     title: ClassVar[str]  # shown to the person
     uses_browser: ClassVar[bool] = True
     has_draft: ClassVar[bool] = True  # False when writing an entry already submits it (Deel)
+    supports_rehearsal: ClassVar[bool] = False  # can fill_week() run with self.rehearsal set?
 
     def __init__(self, settings: PlatformSettings, app: Settings, cache: dict):
         self.settings = settings
         self.app = app
         self.cache = cache  # kept in state.json across weeks
         self.session: BrowserSession | None = None
+        self.rehearsal = False  # set by `run --rehearse`: fill everything in, but never save or submit
         self.log = logging.getLogger(f"lazy_bot.{self.name}")
 
     @property

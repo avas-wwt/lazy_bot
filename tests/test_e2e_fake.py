@@ -21,13 +21,13 @@ def needs_edge():
         pytest.skip("Microsoft Edge is not installed")
 
 
-def run_once(settings):
+def run_once(settings, rehearse=False):
     state = State.load(settings.state_path)
     timesheet = read_timesheet(settings.csv_path, settings.date_formats)
     platform = make_platform(settings, "fake", state.cache("fake"))
     with BrowserPool(settings) as pool:
         runner = Runner(settings, state, timesheet, [platform], mode=settings.submit_mode,
-                        run_dir=settings.logs_dir / "run", open_session=pool.open)
+                        run_dir=settings.logs_dir / "run", open_session=pool.open, rehearse=rehearse)
         return runner.run(timesheet.weeks()[:1])
 
 
@@ -50,7 +50,7 @@ def test_saved_pages_never_contain_passwords(make_settings, tmp_path):
         session.page.locator("#password").fill(typed)
         session.page.evaluate("document.title = 'known-from-env-file'")  # as if a page echoed it back
         Snapshotter(session, tmp_path / "snaps").capture()
-        session.save_failure(tmp_path / "failure", "fake-fill")
+        session.save_page(tmp_path / "failure", "fake-fill")
         session.close()
     saved = [p for folder in ("snaps", "failure") for p in (tmp_path / folder).iterdir() if p.suffix != ".png"]
     assert len(saved) >= 4
@@ -63,6 +63,11 @@ def test_whole_run_in_edge(make_settings, write_csv):
     write_csv()
     settings = make_settings(PLATFORMS="fake", SUBMIT_MODE="submit", HEADLESS="true", LOGIN_TIMEOUT_SECONDS="30",
                              FAKE_EMAIL="me@example.com", FAKE_PASSWORD="not-a-real-password")
+    assert run_once(settings, rehearse=True)
+    assert site_data(settings)["sheets"] == {}  # rehearsal: typed in, never saved
+    assert (settings.logs_dir / "run" / "fake-rehearsal.png").exists()
+    assert not settings.archive_dir.exists()
+
     assert run_once(settings)
 
     sheet = site_data(settings)["sheets"]["2026-10-05"]

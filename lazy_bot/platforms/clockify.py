@@ -53,6 +53,7 @@ class ClockifyPlatform(Platform):
     name = "clockify"
     title = "Clockify"
     uses_browser = False
+    supports_rehearsal = True  # works out what it would write, and writes nothing
 
     def __init__(self, settings, app, cache):
         super().__init__(settings, app, cache)
@@ -160,7 +161,7 @@ class ClockifyPlatform(Platform):
             entry = week.entry(day)
             if entry is None or entry.minutes == 0:
                 if ours:
-                    self._call("DELETE", f"/workspaces/{workspace}/time-entries/{ours}")
+                    self._write("DELETE", f"/workspaces/{workspace}/time-entries/{ours}")
                     counts["deleted"] += 1
                 mine.pop(key, None)
                 continue
@@ -170,15 +171,23 @@ class ClockifyPlatform(Platform):
                 continue
             body = self._body(entry)
             if ours is None:
-                mine[key] = self._call("POST", f"/workspaces/{workspace}/time-entries", json=body)["id"]
+                created = self._write("POST", f"/workspaces/{workspace}/time-entries", json=body)
+                if created:
+                    mine[key] = created["id"]
                 counts["created"] += 1
             elif self._same(by_id[ours], body):
                 counts["unchanged"] += 1
             else:
-                self._call("PUT", f"/workspaces/{workspace}/time-entries/{ours}", json=body)
+                self._write("PUT", f"/workspaces/{workspace}/time-entries/{ours}", json=body)
                 counts["updated"] += 1
         done = ", ".join(f"{n} {what}" for what, n in counts.items() if n)
+        if self.rehearsal:
+            return f"nothing written; a real run would do: {done or 'nothing'}"
         return f"entries saved ({done or 'nothing to do'})"
+
+    def _write(self, method: str, path: str, **kwargs):
+        """POST/PUT/DELETE, or nothing at all while rehearsing."""
+        return None if self.rehearsal else self._call(method, path, **kwargs)
 
     def submit(self, week: Week, store: dict) -> str:
         self._call("POST", f"/workspaces/{self.cache['workspace_id']}/approval-requests/TIMESHEET",

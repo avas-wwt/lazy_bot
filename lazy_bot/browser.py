@@ -114,8 +114,8 @@ class BrowserSession:
             except (PlaywrightError, StopIteration):
                 pass
 
-    def save_failure(self, folder: Path, label: str) -> list[Path]:
-        """Screenshot and HTML (passwords blanked) of the current page, for working out what went wrong."""
+    def save_page(self, folder: Path, label: str) -> list[Path]:
+        """Screenshot and HTML (passwords blanked) of the current page, e.g. for working out what went wrong."""
         saved: list[Path] = []
         if self.context is None:
             return saved

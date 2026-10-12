@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import textwrap
 import time
@@ -42,9 +43,11 @@ class Runner:
         run_dir: Path,
         only: set[str] | None = None,
         force: bool = False,
+        rehearse: bool = False,
         open_session: Callable[[Platform], object] | None = None,
         confirm: Confirm = lambda question, pump: False,
         retry_locked: Callable[[str], bool] = lambda message: False,
+        hold: Callable[[str, Callable[[], None]], None] = lambda message, pump: None,
     ):
         self.settings = settings
         self.state = state
@@ -54,9 +57,11 @@ class Runner:
         self.run_dir = run_dir
         self.only = only
         self.force = force
+        self.rehearse = rehearse
         self.open_session = open_session
         self.confirm = confirm
         self.retry_locked = retry_locked
+        self.hold = hold
         self._signed_in: set[str] = set()
 
     def run(self, weeks: list[Week]) -> bool:
@@ -69,6 +74,14 @@ class Runner:
     def run_week(self, week: Week) -> bool:
         show_week(week)
         lines = {p.name: Line(p, status=self._earlier_status(week, p)) for p in self.platforms}
+        if self.rehearse:
+            try:
+                self._rehearse(week, lines)
+                show_summary(lines)
+                self.hold("Nothing was saved. Look at the Edge windows, then press Enter to close them...", self.pump)
+            finally:
+                self._close_sessions()
+            return not any(line.failed for line in lines.values())
         try:
             to_submit = self._fill(week, lines)
             show_summary(lines)
@@ -89,6 +102,21 @@ class Runner:
             session.pump(100)
 
     # Steps
+
+    def _rehearse(self, week: Week, lines: dict[str, Line]) -> None:
+        """Fill every platform in without saving or submitting; state.json and the CSV stay as they are."""
+        for p in self.platforms:
+            if self.only is not None and p.name not in self.only:
+                continue
+            line = lines[p.name]
+            if not p.supports_rehearsal:
+                line.status = "skipped (can't rehearse this site yet)"
+                continue
+            p.rehearsal = True
+            scratch = copy.deepcopy(self.state.record(week.key, p.name)["data"])
+            if self._step(p, line, "rehearse", p.fill_week, week, scratch) and p.session is not None:
+                for path in p.session.save_page(self.run_dir, f"{p.name}-rehearsal"):
+                    log.info("  saved %s", path)
 
     def _fill(self, week: Week, lines: dict[str, Line]) -> list[Platform]:
         """Save drafts where the site has them; return what still needs a go-ahead."""
@@ -151,7 +179,7 @@ class Runner:
             line.status, line.pending, line.failed = f"FAILED: {message}", "", True
             log.debug("%s %s failed\n%s", p.name, label, traceback.format_exc())
             if p.session is not None:
-                for path in p.session.save_failure(self.run_dir, f"{p.name}-{label}"):
+                for path in p.session.save_page(self.run_dir, f"{p.name}-{label}-failed"):
                     log.info("  saved %s", path)
             return False
         finally:

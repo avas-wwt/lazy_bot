@@ -18,9 +18,9 @@ Every Friday at 16:00 a scheduled task runs these steps:
 
 | Platform | How | Status |
 |---|---|---|
-| Clockify | REST API (personal API key) | written, to be tried with a real key |
+| Clockify | REST API (personal API key) | written, key checked, first real write pending |
 | Timesheet Portal (Cloud Decisions UK) | Edge | not written yet |
-| WWT Kronos (UKG) | Edge, WWT Okta sign-in | not written yet |
+| WWT Kronos (UKG) | Edge, WWT Okta sign-in, follows the WWT "My Time User Guide" | written and rehearsed on the real timecard; first real save pending |
 | GlobalSource (Deel) | Edge; Deel has no drafts, so entries are only created after your "y" | not written yet |
 
 ## Setup (Windows)
@@ -48,6 +48,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 .venv\Scripts\python -m lazy_bot check                 # validate the CSV, list due weeks (no browser)
 .venv\Scripts\python -m lazy_bot run                   # process every due week
 .venv\Scripts\python -m lazy_bot run --mode save       # fill and save only
+.venv\Scripts\python -m lazy_bot run --rehearse --week 2026-10-12  # type it all in, save nothing (try-out)
 .venv\Scripts\python -m lazy_bot run --platform kronos # just one platform
 .venv\Scripts\python -m lazy_bot run --week 2026-10-05 # a specific week, due or not
 .venv\Scripts\python -m lazy_bot login [--platform X]  # sign in once per platform
@@ -72,6 +73,16 @@ A week (Monday to Sunday) is **due** from its `RUN_DAY` at `RUN_TIME` (Friday 16
 - Use `--force` to redo everything.
 
 The week is archived and cleared only when **every** platform in `PLATFORMS` has finished it.
+
+## WWT Kronos: what lazy_bot does
+
+It follows WWT's *My Time User Guide*:
+1. **Show activities**, and open the week. Only this week and last week are supported; older weeks are entered by hand.
+2. **Days off**: each weekday up to today with no hours gets a `0` on the **Home** line first (holidays, sick days).
+3. **Activity line**: if missing, it's added with **Add activity**. lazy_bot searches `KRONOS_ACTIVITY_QUERY` (your code + `*`), opens it, and picks the child containing `KRONOS_ACTIVITY` ("Project Cost Collection", never "Non-Billable").
+4. **Hours** go on that project line. Kronos fills the Home line itself.
+5. **Description**: each day's description becomes an `Activity Comment` on that day's cell.
+6. **Save**. After your "y", **Approve** (`KRONOS_APPROVE=true`).
 
 ## Safety
 

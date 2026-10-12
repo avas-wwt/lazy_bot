@@ -189,6 +189,16 @@ def test_a_day_removed_from_the_csv_is_removed_from_clockify(clockify, write_csv
     assert friday not in platform.http.entries and "2026-10-09" not in store["entries"]
 
 
+def test_rehearsal_writes_nothing(clockify, write_csv):
+    platform = clockify()
+    platform.login()
+    platform.rehearsal = True
+    store = {}
+    assert platform.fill_week(week_of(write_csv, platform.app), store) == \
+        "nothing written; a real run would do: 5 created"
+    assert platform.http.writes() == [] and store == {"entries": {}}
+
+
 def test_rate_limit_says_it_will_carry_on(clockify):
     with pytest.raises(PlatformError, match="30 an hour"):
         clockify(api=FakeClockify(limit=1)).login()

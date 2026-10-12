@@ -26,10 +26,11 @@ class Site:
         self.failing: set[tuple[str, str]] = set()
 
 
-def platform_class(name: str, *, draft: bool = True, submit: bool = True) -> type[Platform]:
+def platform_class(name: str, *, draft: bool = True, submit: bool = True, rehearsable: bool = True) -> type[Platform]:
     class FakeApi(Platform):
         uses_browser = False
         has_draft = draft
+        supports_rehearsal = rehearsable
         site: Site
 
         def has_submit(self) -> bool:
@@ -46,7 +47,7 @@ def platform_class(name: str, *, draft: bool = True, submit: bool = True) -> typ
             self.site.calls.append((self.name, "login"))
 
         def fill_week(self, week, store) -> str:
-            return self._do("fill", store)
+            return self._do("rehearse" if self.rehearsal else "fill", store)
 
         def submit(self, week, store) -> str:
             return self._do("submit", store)
@@ -69,11 +70,11 @@ def setup(make_settings, write_csv, site):
     classes = {
         "alpha": platform_class("alpha"),
         "beta": platform_class("beta", submit=False),
-        "gamma": platform_class("gamma", draft=False),
+        "gamma": platform_class("gamma", draft=False, rehearsable=False),
     }
 
     def runner(names=("alpha", "beta", "gamma"), *, mode="confirm", answer=True, only=None, force=False,
-               retry=lambda message: False):
+               rehearse=False, retry=lambda message: False):
         state = State.load(settings.state_path)
         timesheet = read_timesheet(settings.csv_path, settings.date_formats)
         platforms = []
@@ -88,7 +89,7 @@ def setup(make_settings, write_csv, site):
             return answer
 
         run = Runner(settings, state, timesheet, platforms, mode=mode, run_dir=settings.logs_dir / "run",
-                     only=only, force=force, confirm=confirm, retry_locked=retry)
+                     only=only, force=force, rehearse=rehearse, confirm=confirm, retry_locked=retry)
         run.asked = asked
         return run, timesheet.weeks()[0]
 
@@ -116,6 +117,19 @@ def test_yes_fills_submits_and_archives(setup, site):
     archive = settings.archive_dir / "2026-10-05_to_2026-10-11.csv"
     assert archive.read_text(encoding="utf-8").count("\n") == 6  # header + 5 days
     assert csv_dates(settings) == ["date", "2026-10-12"]
+
+
+def test_rehearsal_records_nothing_and_skips_sites_that_cannot_rehearse(setup, site):
+    settings, make = setup
+    before = settings.csv_path.read_bytes()
+    runner, week = make(rehearse=True)
+    assert runner.run_week(week)
+    assert site.calls == [("alpha", "login"), ("alpha", "rehearse"), ("beta", "login"), ("beta", "rehearse")]
+    assert runner.asked == []
+    assert statuses(settings) == {"alpha": None, "beta": None, "gamma": None}
+    data = State.load(settings.state_path).data["weeks"]["2026-10-05"]["platforms"]
+    assert all(record["data"] == {} for record in data.values())  # adapters' scratch copies were thrown away
+    assert settings.csv_path.read_bytes() == before and not settings.archive_dir.exists()
 
 
 def test_no_keeps_drafts_and_never_writes_to_sites_without_drafts(setup, site):

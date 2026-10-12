@@ -14,6 +14,7 @@ FIXTURE = PROJECT_DIR / "tests" / "fixtures" / "fake_timesheet.html"
 class FakePlatform(Platform):
     name = "fake"
     title = "Fake timesheet"
+    supports_rehearsal = True
 
     @property
     def url(self) -> str:
@@ -41,6 +42,8 @@ class FakePlatform(Platform):
             entry = week.entry(day)
             page.get_by_label(f"Hours {day}", exact=True).fill(entry.hours_text() if entry else "")
             page.get_by_label(f"Note {day}", exact=True).fill(entry.description if entry else "")
+        if self.rehearsal:
+            return "filled in, not saved"
         page.locator("#save").click()
         expect(page.locator("#status")).to_have_text("Draft saved")
         return f"draft saved ({week.hours_text()} h)"
