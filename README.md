@@ -25,16 +25,19 @@ Every Friday at 16:00 a scheduled task runs these steps:
 
 ## Setup (Windows)
 
-1. Install Python 3.13 for your user, then create the environment from this folder:
+1. Clone the repo, then run this in its folder:
    ```powershell
-   winget install --id Python.Python.3.13 --exact --source winget --scope user
-   py -3.13 -m venv .venv
-   .venv\Scripts\python -m pip install -r requirements.txt
+   powershell -ExecutionPolicy Bypass -File .\setup.ps1
    ```
-   Playwright uses the Edge you already have, so there's no `playwright install`.
-2. Copy `.env.example` to `.env` and fill in your values. `.env` is git-ignored; never commit it.
-3. Create `timesheet.csv` with the line `date,hours,description`.
-4. Sign in to each platform once. The sessions are kept in `%LOCALAPPDATA%\lazy_bot\profiles\<platform>`:
+   It does the following:
+   - Installs Python 3.13 for your user if needed (winget, no admin).
+   - Creates `.venv` and installs the packages. Playwright uses the Edge you already have, so there's nothing else to download.
+   - Creates `.env` and `timesheet.csv` if they're missing.
+   - Registers the **"lazy_bot timesheets"** scheduled task. It runs every `RUN_DAY` at `RUN_TIME`, and 3 minutes after you sign in to Windows to catch up on a missed run.
+
+   You can run it again at any time. `-SkipTask` leaves the task alone, and `-RemoveTask` deletes it.
+2. Fill in `.env`. It's git-ignored; never commit it.
+3. Sign in to each platform once. The sessions are kept in `%LOCALAPPDATA%\lazy_bot\profiles\<platform>`:
    ```powershell
    .venv\Scripts\python -m lazy_bot login
    ```
