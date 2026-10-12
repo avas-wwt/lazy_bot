@@ -2,8 +2,9 @@
 
 For each week: show activities; give every weekday without hours a 0 on the Home line first (the guide's rule
 for holidays and sick days); add the project's PROJECT COST COLLECTION activity line if it isn't there; type
-each day's hours on that line (Kronos fills the Home line itself); attach the day's description as an
-"Activity Comment"; Save. Submitting means clicking Approve, after your "y".
+each day's hours on that line (Kronos fills the Home line itself); Save. Then attach each day's description
+as an "Activity Comment" and Save again: Kronos drops comments put on hours that aren't saved yet.
+Submitting means clicking Approve, after your "y".
 
 Sign-in goes through WWT's Okta: the username and password come from .env when present, MFA is always yours.
 """
@@ -28,6 +29,8 @@ _COLUMN_FOR_HEADER = """(label) => {
   return null;
 }"""
 _ERROR_BUTTON = re.compile(r"^Error\s+(.*?)\s*Close message$", re.S)
+_COMMENT_COUNT = re.compile(r"Comments \[(\d+)\]")
+NOTE_LIMIT = 250  # characters in a Kronos comment note
 
 
 def _hours(text: str) -> float | None:
@@ -98,36 +101,47 @@ class KronosPlatform(Platform):
     def fill_week(self, week: Week, store: dict) -> str:
         self._open_week(week)
         self._close_messages()
+        worked = {entry.day: entry for entry in week.worked_days()}
+        if worked:
+            self._ensure_activity_line()
+        activity = self._activity_row_or_none()
         home = self._row(lambda label: label == "Home", "Home")
-        for day in week.dates()[:5]:  # the guide: a weekday you didn't work gets a 0 on Home first
-            entry = week.entry(day)
-            not_worked = day <= date.today() and (entry is None or entry.minutes == 0)
-            if not_worked and _hours(self._cell(home, day).inner_text()) != 0:
-                self._type(self._cell(home, day), "0")
-        for entry in week.worked_days():  # ...and a 0 lazy_bot left there earlier must go once you did work
-            if _hours(self._cell(home, entry.day).inner_text()) == 0:
-                self._type(self._cell(home, entry.day), "")
 
-        self._ensure_activity_line()
-        for day in week.dates():
-            entry = week.entry(day)
-            wanted = entry.minutes / 60 if entry and entry.minutes else None
+        # 1. Days no longer worked lose their activity hours first, so Kronos frees their Home cell.
+        if activity is not None:
+            for day in week.dates():
+                if day not in worked and _hours(self._cell(activity, day).inner_text()) is not None:
+                    self._type(self._cell(self._activity_row(), day), "", "the project line")
+        # 2. The guide: a weekday you didn't work gets a 0 on the Home line before any hours are entered,
+        #    and a 0 left there earlier must go once you did work that day.
+        for day in week.dates()[:5]:
+            shown = _hours(self._cell(home, day).inner_text())
+            if day <= date.today() and day not in worked and shown != 0:
+                self._type(self._cell(home, day), "0", "the Home line")
+            elif day in worked and shown == 0:
+                self._type(self._cell(home, day), "", "the Home line")
+        # 3. Each worked day's hours on the project line.
+        for day, entry in worked.items():
             cell = self._cell(self._activity_row(), day)
-            if not _same(_hours(cell.inner_text()), wanted):
-                self._type(cell, entry.hours_text() if wanted else "")
+            if not _same(_hours(cell.inner_text()), entry.minutes / 60):
+                self._type(cell, entry.hours_text(), "the project line")
         self._raise_errors()
 
         comment_type = self.settings.get("COMMENT", "Activity Comment")
-        commented = 0
-        if comment_type:
-            for entry in week.worked_days():
-                if entry.description and self._comment(entry, comment_type):
-                    commented += 1
+        to_comment = [e for e in week.worked_days() if e.description] if comment_type else []
         if self.rehearsal:
-            return f"filled in, not saved ({week.hours_text()} h, {commented} comment(s) typed)"
+            typed = sum(self._comment(entry, comment_type) for entry in to_comment)
+            return f"filled in, not saved ({week.hours_text()} h, {typed} comment(s) typed)"
         self._save()
         self._check_saved(week)
-        return f"saved ({week.hours_text()} h" + (f", {commented} comment(s))" if commented else ")")
+        # Comments only stick to saved hours, hence the second round and the second Save.
+        added = sum(self._comment(entry, comment_type) for entry in to_comment)
+        if added:
+            self._save()
+            missing = [str(entry.day) for entry in to_comment if not self._has_comment(entry, comment_type)]
+            if missing:
+                raise PlatformError(f"hours saved, but the comment didn't stick on {', '.join(missing)}")
+        return f"saved ({week.hours_text()} h" + (f", {added} comment(s) added)" if added else ")")
 
     def submit(self, week: Week, store: dict) -> str:
         self._open_week(week)
@@ -187,16 +201,26 @@ class KronosPlatform(Platform):
     def _activity_row(self) -> int:
         return self._row(self._activity_matches, "project activity")
 
+    def _activity_row_or_none(self) -> int | None:
+        try:
+            return self._activity_row()
+        except PlatformError:
+            return None
+
     def _cell(self, row: int, day: date) -> Locator:
         column = self.page.evaluate(_COLUMN_FOR_HEADER, f"{day:%a} {day:%m/%d}")
         if not column:
             raise PlatformError(f"the timecard shows no column for {day}")
         return self.page.locator(".ui-grid-render-container-body .ui-grid-row").nth(row).locator(f".ui-grid-cell.{column}")
 
-    def _type(self, cell: Locator, text: str) -> None:
+    def _type(self, cell: Locator, text: str, where: str) -> None:
         cell.dblclick()
         editor = cell.locator("input")
-        editor.wait_for(timeout=10_000)
+        try:
+            editor.wait_for(timeout=10_000)
+        except PlaywrightError:
+            raise PlatformError(f"Kronos doesn't let lazy_bot edit {where} there "
+                                f"(the cell holds {cell.inner_text().strip() or 'nothing'})") from None
         editor.fill(text)
         editor.press("Tab")
         self.page.wait_for_timeout(600)
@@ -240,39 +264,58 @@ class KronosPlatform(Platform):
         page.wait_for_timeout(1500)
         self._activity_row()
 
-    def _comment(self, entry: DayEntry, comment_type: str) -> bool:
-        """Give the day's activity cell an `comment_type` comment holding the description. False if already there."""
-        page = self.page
-        self._cell(self._activity_row(), entry.day).click(button="right")
-        details = page.get_by_role("dialog").filter(has_text="Activity name").first
+    def _details(self, day: date) -> tuple[Locator, str]:
+        """Right-click the day's activity cell: Kronos shows its details (status, comments, actions)."""
+        self._cell(self._activity_row(), day).click(button="right")
+        details = self.page.get_by_role("dialog").filter(has_text="Activity name").first
         details.wait_for(timeout=15_000)
-        text = details.inner_text()
-        if comment_type in text and entry.description in text:
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
+        return details, details.inner_text()
+
+    def _close_details(self) -> None:
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(500)
+
+    def _has_comment(self, entry: DayEntry, comment_type: str) -> bool:
+        _, text = self._details(entry.day)
+        self._close_details()
+        return comment_type in text and entry.description[:NOTE_LIMIT] in text
+
+    def _comment(self, entry: DayEntry, comment_type: str) -> bool:
+        """Give the day's activity cell a `comment_type` comment holding the description. False if nothing to do."""
+        page = self.page
+        note_text = entry.description[:NOTE_LIMIT]
+        if len(note_text) < len(entry.description):
+            self.log.warning("! Kronos notes hold %d characters; the %s description is cut short there.",
+                             NOTE_LIMIT, entry.day)
+        details, text = self._details(entry.day)
+        if comment_type in text and note_text in text:
+            self._close_details()
+            return False
+        count = _COMMENT_COUNT.search(text)
+        if count and count[1] != "0":  # Kronos shows saved notes read-only; don't pile up a second one
+            self._close_details()
+            self.log.warning("! Kronos already has a different comment on %s; left as it is (edit it there).",
+                             entry.day)
             return False
         details.get_by_role("button", name="Comments and notes").filter(visible=True).last.click()
-        note = page.get_by_placeholder(re.compile(r"Type a note"))
-        note.first.wait_for(timeout=15_000)
-        editor = page.get_by_role("dialog").filter(has=note).first
+        note = page.get_by_placeholder(re.compile(r"Type a note")).first
+        note.wait_for(timeout=15_000)
+        editor = page.get_by_role("dialog").filter(has=page.get_by_placeholder(re.compile(r"Type a note"))).first
         chosen = editor.locator("input[role=combobox]").first
-        if comment_type not in (chosen.input_value() if chosen.count() else ""):
-            # the list opens from a toggle that is itself a combobox (next to the read-only text box)
-            editor.locator("button[role=combobox]").or_(editor.get_by_role("combobox", name="Select a comment")).first.click()
-            option = page.get_by_role("option", name=comment_type, exact=True).or_(
-                page.locator("li:visible").filter(has_text=re.compile(rf"^\s*{re.escape(comment_type)}\s*$")))
-            option.first.click()
-        limit = note.first.get_attribute("maxlength")
-        text = entry.description[: int(limit)] if limit and limit.isdigit() else entry.description
-        if len(text) < len(entry.description):
-            self.log.warning("! Kronos notes hold %s characters; the %s description was cut short.", limit, entry.day)
-        note.first.fill(text)
+        if chosen.input_value() != comment_type:
+            chosen.click()  # opens the list of comment types ("Activity Comment 1 of 38", ...)
+            page.get_by_role("link", name=re.compile(rf"^{re.escape(comment_type)} \d+ of \d+$")).filter(
+                visible=True).first.click(timeout=15_000)
+            if chosen.input_value() != comment_type:
+                raise PlatformError(f"couldn't choose the comment type {comment_type!r} (KRONOS_COMMENT)")
+        note.fill(note_text)
         if self.rehearsal:
             editor.get_by_role("button", name="Cancel").click()  # rehearsing: show it, keep nothing
         else:
             editor.get_by_role("button", name="Apply").click()
         editor.wait_for(state="hidden", timeout=15_000)
         page.wait_for_timeout(800)
+        self._raise_errors()
         return True
 
     def _save(self) -> None:
@@ -286,7 +329,11 @@ class KronosPlatform(Platform):
         self._raise_errors()
 
     def _check_saved(self, week: Week) -> None:
-        row = self._activity_row()
+        row = self._activity_row_or_none()
+        if row is None:
+            if week.worked_days():
+                raise PlatformError("after saving, the project line is gone")
+            return
         wrong = []
         for day in week.dates():
             entry = week.entry(day)
