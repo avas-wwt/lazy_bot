@@ -18,9 +18,9 @@ Every Friday at 16:00 a scheduled task runs these steps:
 
 | Platform | How | Status |
 |---|---|---|
-| Clockify | REST API (personal API key) | written, key checked, first real write pending |
-| Timesheet Portal (Cloud Decisions UK) | Edge; one timesheet per month: weekly "Save draft", submitted in the week holding the month's last day | written and rehearsed; first real save pending |
-| WWT Kronos (UKG) | Edge, WWT Okta sign-in, follows the WWT "My Time User Guide" | written and rehearsed on the real timecard; first real save pending |
+| Clockify | REST API (personal API key) | working (real entry created, re-run changed nothing) |
+| Timesheet Portal (Cloud Decisions UK) | Edge; one timesheet per month: weekly "Save draft", submitted in the week holding the month's last day | working (real draft saved and read back); monthly Submit not yet exercised |
+| WWT Kronos (UKG) | Edge, WWT Okta sign-in, follows the WWT "My Time User Guide" | working (real save with comment, re-run changed nothing); Approve not yet exercised |
 | GlobalSource (Deel) | Edge; Deel has no drafts, so entries are only created after your "y" | not written yet |
 
 ## Setup (Windows)
