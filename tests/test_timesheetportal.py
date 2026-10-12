@@ -14,7 +14,8 @@ def test_only_the_week_holding_a_month_end_submits(make_settings):
     assert not platform.needs_submit(week_of(date(2026, 10, 12)))
     assert month_ends(week_of(date(2026, 10, 26))) == [date(2026, 10, 31)]  # Mon 26/10 to Sun 1/11
     assert platform.needs_submit(week_of(date(2026, 10, 26)))
-    assert month_ends(week_of(date(2026, 11, 23))) == [date(2026, 11, 30)]  # month ends on the Monday after
+    # November ends on Monday 30/11: it's submitted that week, once every November day is in
+    assert month_ends(week_of(date(2026, 11, 23))) == []
     assert month_ends(week_of(date(2026, 11, 30))) == [date(2026, 11, 30)]
 
 
