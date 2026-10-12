@@ -59,7 +59,7 @@ class ClockifyPlatform(Platform):
         super().__init__(settings, app, cache)
         self.http = requests.Session()
 
-    def has_submit(self) -> bool:
+    def needs_submit(self, week: Week) -> bool:
         return self.settings.flag("SUBMIT_APPROVAL")
 
     def submit_label(self) -> str:

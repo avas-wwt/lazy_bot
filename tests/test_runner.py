@@ -33,7 +33,7 @@ def platform_class(name: str, *, draft: bool = True, submit: bool = True, rehear
         supports_rehearsal = rehearsable
         site: Site
 
-        def has_submit(self) -> bool:
+        def needs_submit(self, week) -> bool:
             return submit
 
         def _do(self, action: str, store: dict) -> str:

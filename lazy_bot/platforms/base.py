@@ -39,8 +39,8 @@ class Platform:
     def url(self) -> str:
         return self.settings.require("URL")
 
-    def has_submit(self) -> bool:
-        """False when there is nothing to click after saving; a saved week then counts as done."""
+    def needs_submit(self, week: Week) -> bool:
+        """Whether this week has a step after saving (Submit, Approve...). If not, a saved week counts as done."""
         return True
 
     def submit_label(self) -> str:

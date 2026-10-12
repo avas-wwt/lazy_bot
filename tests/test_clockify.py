@@ -205,5 +205,5 @@ def test_rate_limit_says_it_will_carry_on(clockify):
 
 
 def test_submit_is_off_unless_asked_for(clockify):
-    assert not clockify().has_submit()
-    assert clockify(CLOCKIFY_SUBMIT_APPROVAL="true").has_submit()
+    assert not clockify().needs_submit(None)
+    assert clockify(CLOCKIFY_SUBMIT_APPROVAL="true").needs_submit(None)

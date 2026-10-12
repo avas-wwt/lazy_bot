@@ -50,7 +50,7 @@ class KronosPlatform(Platform):
     title = "WWT Kronos (UKG)"
     supports_rehearsal = True
 
-    def has_submit(self) -> bool:
+    def needs_submit(self, week: Week) -> bool:
         return self.settings.flag("APPROVE")
 
     def submit_label(self) -> str:

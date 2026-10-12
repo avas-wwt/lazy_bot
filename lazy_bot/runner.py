@@ -144,7 +144,7 @@ class Runner:
                 if not self._step(p, line, "fill", p.fill_week, week, record["data"]):
                     continue
                 self.state.mark(week.key, p.name, SAVED, week.data_hash())
-            if self.mode != "save" and p.has_submit():
+            if self.mode != "save" and p.needs_submit(week):
                 line.pending = p.submit_label()
                 to_submit.append(p)
         return to_submit
@@ -243,7 +243,7 @@ class Runner:
 
     def _finished(self, week: Week, p: Platform) -> bool:
         status = self._status(week, p)
-        return status == SUBMITTED or (status == SAVED and (self.mode == "save" or not p.has_submit()))
+        return status == SUBMITTED or (status == SAVED and (self.mode == "save" or not p.needs_submit(week)))
 
     def _earlier_status(self, week: Week, p: Platform) -> str:
         status = self._status(week, p)
