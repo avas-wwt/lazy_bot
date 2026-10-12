@@ -22,6 +22,26 @@ if TYPE_CHECKING:
 log = logging.getLogger("lazy_bot.browser")
 VIEWPORT = {"width": 1366, "height": 900}  # UKG switches to a list view below 768 px wide
 BROWSER_MODES = ("launch", "attach")
+SECRET_WORDS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY")
+_TYPED_PASSWORDS = "() => Array.from(document.querySelectorAll('input[type=password]'), i => i.value).filter(Boolean)"
+
+
+def page_secrets(page: Page, known: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Passwords typed on the page (in any frame) plus `known` ones, longest first, for blanking out of dumps."""
+    found = [secret for secret in known if secret]
+    for frame in page.frames:
+        try:
+            found += frame.evaluate(_TYPED_PASSWORDS)
+        except PlaywrightError:
+            pass
+    return sorted(set(found), key=len, reverse=True)
+
+
+def redact(text: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        if len(secret) >= 4:  # shorter values would blank out ordinary text
+            text = text.replace(secret, "[redacted]")
+    return text
 
 
 def find_edge() -> Path:
@@ -45,6 +65,7 @@ class BrowserSession:
         self.headless = headless
         self.mode = mode
         self.args = list(args)
+        self.secrets: list[str] = []  # the platform's passwords/keys, never written into saved pages
         self.context: BrowserContext | None = None
         self._page: Page | None = None
         self._browser = None
@@ -94,7 +115,7 @@ class BrowserSession:
                 pass
 
     def save_failure(self, folder: Path, label: str) -> list[Path]:
-        """Screenshot and HTML of the current page, for working out what went wrong."""
+        """Screenshot and HTML (passwords blanked) of the current page, for working out what went wrong."""
         saved: list[Path] = []
         if self.context is None:
             return saved
@@ -104,7 +125,7 @@ class BrowserSession:
             self.page.screenshot(path=str(shot), full_page=True)
             saved.append(shot)
             html = folder / f"{label}.html"
-            html.write_text(self.page.content(), encoding="utf-8")
+            html.write_text(redact(self.page.content(), page_secrets(self.page, self.secrets)), encoding="utf-8")
             saved.append(html)
         except Exception as exc:  # the window may already be gone; the log still has the error
             log.debug("could not save failure files: %s", exc)
@@ -175,6 +196,8 @@ class BrowserPool:
             mode=options.get("BROWSER_MODE", "launch").lower(),
             args=tuple(options.get("BROWSER_ARGS").split()),
         )
+        session.secrets = [value for key, value in options.values.items()
+                           if value and any(word in key for word in SECRET_WORDS)]
         session.open()
         return session
 

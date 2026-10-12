@@ -44,6 +44,10 @@ class Platform:
     def submit_label(self) -> str:
         return "Submit"
 
+    def describe(self) -> str:
+        """What login() found (account, workspace...), shown by `lazy_bot login`. Empty if nothing to say."""
+        return ""
+
     def login(self) -> None:
         """Open the site and make sure we're signed in. MFA is always left to the person."""
         raise NotImplementedError

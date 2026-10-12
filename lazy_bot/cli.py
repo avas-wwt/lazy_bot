@@ -10,8 +10,10 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+import truststore
+
 from .config import SUBMIT_MODES, ConfigError, Settings, load_settings
-from .platforms import Platform, adapter_class, make_platform
+from .platforms import Platform, PlatformError, make_platform
 from .state import State
 from .timesheet import TimesheetError, TimesheetFile, Week, read_timesheet
 
@@ -22,6 +24,9 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")  # an odd character in a description must not crash a run
+    # Trust the same certificates as Windows: company networks that inspect HTTPS (e.g. Netskope) re-sign
+    # every site with their own root certificate, which Windows knows and Python's bundled list doesn't.
+    truststore.inject_into_ssl()
     args = build_parser().parse_args(argv)
     try:
         settings = load_settings(args.env_file)
@@ -29,6 +34,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, TimesheetError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+    except PlatformError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
         return 130
@@ -42,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("check", help="check timesheet.csv and show which weeks are due (no browser)")
     check.set_defaults(handler=cmd_check)
 
-    login = commands.add_parser("login", help="open each platform's Edge profile so you can sign in once")
+    login = commands.add_parser("login", help="sign in once per platform (API platforms: check the key, read-only)")
     login.add_argument("--platform", action="append", help="only this platform (can be repeated)")
     login.set_defaults(handler=cmd_login)
 
@@ -129,15 +137,25 @@ def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
 
     from .browser import BrowserPool
 
-    names = args.platform or [name for name in settings.platforms if adapter_class(name).uses_browser]
+    names = args.platform or list(settings.platforms)
     if not names:
-        print("No browser platforms in PLATFORMS.")
-        return 0
+        raise ConfigError("PLATFORMS is empty in .env")
+    state = State.load(settings.state_path)
+    failed = False
     with BrowserPool(settings) as pool:
         for name in names:
-            platform = make_platform(settings, name, {})
+            platform = make_platform(settings, name, state.cache(name))
             if not platform.uses_browser:
-                print(f"[{platform.name}] uses an API key; there is nothing to sign in to.")
+                platform.cache.clear()  # look everything up again
+                try:
+                    platform.login()
+                except (ConfigError, PlatformError) as exc:
+                    print(f"[{platform.name}] {exc}")
+                    failed = True
+                    continue
+                finally:
+                    state.save()
+                print(f"[{platform.name}] {platform.describe() or 'signed in'}")
                 continue
             print(f"[{platform.name}] Sign in to {platform.title} in the Edge window that opens "
                   "(tick 'stay signed in' if offered), then close the window.")
@@ -149,7 +167,7 @@ def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
             session.wait_until_closed()
             session.close()
             print(f"[{platform.name}] Done; the sign-in is kept in {settings.profile_dir(platform.name)}")
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_inspect(settings: Settings, args: argparse.Namespace) -> int:
@@ -173,12 +191,12 @@ def cmd_inspect(settings: Settings, args: argparse.Namespace) -> int:
         if args.every > 0:
             print(f"Saving a snapshot whenever a page changes into {folder}. Close the Edge window to stop.")
             while session.is_open():
-                if snapper.capture(only_changes=True):
-                    print(f"  {snapper.count} snapshot(s) so far")
+                if not snapper.full and snapper.capture(only_changes=True):
+                    print(f"  {snapper.count} snapshot(s) so far" + (" (the maximum)" if snapper.full else ""))
                 session.pump(int(args.every * 1000))
         else:
             print(f"Press Enter to save a snapshot of every open tab into {folder}; type q and Enter to stop.")
-            while session.is_open():
+            while session.is_open() and not snapper.full:
                 answer = read_line("> ", session.pump)
                 if answer is None or answer.strip().lower() == "q":
                     break

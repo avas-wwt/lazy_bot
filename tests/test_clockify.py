@@ -39,11 +39,14 @@ class FakeClockify:
         if self.limit is not None and len(self.calls) > self.limit:
             return Response(429, {"message": "Too many requests"})
         if (method, path) == ("GET", "/user"):
-            return Response(data={"id": "u1", "activeWorkspace": "w1", "defaultWorkspace": "w1"})
+            return Response(data={"id": "u1", "name": "Pat", "activeWorkspace": "w1", "defaultWorkspace": "w1"})
         if (method, path) == ("GET", "/workspaces/w1"):
-            return Response(data={"id": "w1", "workspaceSettings": {"forceProjects": self.force_projects}})
+            return Response(data={"id": "w1", "name": "Acme",
+                                  "workspaceSettings": {"forceProjects": self.force_projects}})
         if (method, path) == ("GET", "/workspaces/w1/projects"):
             return Response(data=[{"id": "p1", "name": "WWT Delivery"}, {"id": "p2", "name": "WWT Delivery (old)"}])
+        if (method, path) == ("GET", f"/workspaces/w1/projects/{PROJECT_ID}"):
+            return Response(data={"id": PROJECT_ID, "name": "JH20260921-Patch Mgmt - Alfeu"})
         if (method, path) == ("GET", "/workspaces/w1/user/u1/time-entries"):
             return Response(data=[e for e in self.entries.values()
                                   if params["start"] <= e["timeInterval"]["start"] < params["end"]])
@@ -72,6 +75,7 @@ class FakeClockify:
         return [call for call in self.calls if call[0] in ("POST", "PUT", "DELETE")]
 
 
+PROJECT_ID = "6ac9332bbe2ed8690f5be4e2"
 WEEK = """date,hours,description
 2026-10-05,8,Sprint planning
 2026-10-06,7.5,Code review
@@ -114,6 +118,21 @@ def test_login_looks_ids_up_once(clockify):
     again = clockify(cache=cache)
     again.login()
     assert again.http.calls == []
+
+
+@pytest.mark.parametrize("value", [PROJECT_ID, f"https://app.clockify.me/projects/{PROJECT_ID}/edit"])
+def test_project_can_be_an_id_or_a_pasted_url(clockify, value):
+    platform = clockify(CLOCKIFY_PROJECT=value)
+    platform.login()
+    assert platform.cache["project_id"] == PROJECT_ID
+    assert ("GET", "/workspaces/w1/projects") not in platform.http.calls  # no name search needed
+    assert platform.describe() == ("the API key works for Pat; workspace 'Acme'; entries go to project "
+                                   "'JH20260921-Patch Mgmt - Alfeu'; the workspace requires no extra fields")
+
+
+def test_unknown_project_id_is_explained(clockify):
+    with pytest.raises(ConfigError, match="no project with id 0123456789abcdef01234567"):
+        clockify(CLOCKIFY_PROJECT="0123456789abcdef01234567").login()
 
 
 def test_required_project_and_unknown_project_are_explained(clockify):
