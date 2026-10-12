@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fake timesheet</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  th, td { padding: 4px 8px; text-align: left; }
+</style>
+</head>
+<body>
+<!-- A stand-in timesheet for lazy_bot's end-to-end test: sign in, pick a week, type hours, save, submit. -->
+<section id="login" hidden>
+  <h1>Sign in</h1>
+  <p><label>Email <input id="email" type="email" autocomplete="off"></label></p>
+  <p><label>Password <input id="password" type="password"></label></p>
+  <button id="sign-in" type="button">Sign in</button>
+</section>
+
+<section id="app" hidden>
+  <h1>My timesheet</h1>
+  <p><label>Week starting <input id="week" type="date"></label></p>
+  <table>
+    <thead><tr><th>Day</th><th>Hours</th><th>Notes</th></tr></thead>
+    <tbody id="days"></tbody>
+  </table>
+  <button id="save" type="button">Save draft</button>
+  <button id="submit" type="button">Submit</button>
+  <p id="status" role="status"></p>
+</section>
+
+<script>
+const KEY = "fake-timesheet";
+const $ = (id) => document.getElementById(id);
+const load = () => JSON.parse(localStorage.getItem(KEY) || '{"signedIn": false, "sheets": {}}');
+const keep = (data) => localStorage.setItem(KEY, JSON.stringify(data));
+
+function addDays(iso, days) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function render() {
+  const data = load();
+  $("login").hidden = data.signedIn;
+  $("app").hidden = !data.signedIn;
+  const week = $("week").value;
+  const body = $("days");
+  body.replaceChildren();
+  if (!week) { $("status").textContent = ""; return; }
+  const sheet = data.sheets[week] || { days: {}, status: "New" };
+  for (let i = 0; i < 7; i++) {
+    const day = addDays(week, i);
+    const saved = sheet.days[day] || { hours: "", note: "" };
+    const row = document.createElement("tr");
+    const label = document.createElement("th");
+    label.textContent = day;
+    const hours = document.createElement("input");
+    hours.setAttribute("aria-label", `Hours ${day}`);
+    hours.value = saved.hours;
+    const note = document.createElement("input");
+    note.setAttribute("aria-label", `Note ${day}`);
+    note.value = saved.note;
+    const hoursCell = document.createElement("td");
+    hoursCell.append(hours);
+    const noteCell = document.createElement("td");
+    noteCell.append(note);
+    row.append(label, hoursCell, noteCell);
+    body.append(row);
+  }
+  $("status").textContent = sheet.status;
+}
+
+$("sign-in").addEventListener("click", () => {
+  if (!$("email").value || !$("password").value) return;
+  const data = load();
+  data.signedIn = true;
+  keep(data);
+  render();
+});
+
+$("week").addEventListener("change", render);
+
+$("save").addEventListener("click", () => {
+  const week = $("week").value;
+  if (!week) return;
+  const data = load();
+  const sheet = { days: {}, status: "Draft saved" };
+  for (let i = 0; i < 7; i++) {
+    const day = addDays(week, i);
+    const hours = document.querySelector(`[aria-label="Hours ${day}"]`).value.trim();
+    const note = document.querySelector(`[aria-label="Note ${day}"]`).value;
+    if (hours) sheet.days[day] = { hours, note };
+  }
+  data.sheets[week] = sheet;
+  keep(data);
+  render();
+});
+
+$("submit").addEventListener("click", () => {
+  const data = load();
+  const sheet = data.sheets[$("week").value];
+  if (!sheet || sheet.status !== "Draft saved") return;
+  sheet.status = "Submitted";
+  keep(data);
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
