@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, timedelta
+from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, expect
@@ -49,6 +50,8 @@ class KronosPlatform(Platform):
     name = "kronos"
     title = "WWT Kronos (UKG)"
     supports_rehearsal = True
+    supports_screenshot = True  # the Friday proof of the week's time for WWT
+    screenshot_name = "wwt-timecard"
 
     def needs_submit(self, week: Week) -> bool:
         return self.settings.flag("APPROVE")
@@ -148,12 +151,14 @@ class KronosPlatform(Platform):
             notes.append(f"{added} comment(s) added")
         if self._kept:
             notes.append(f"{len(self._kept)} older comment(s) left as they are")
+        self._capture(week)
         return f"saved ({week.hours_text()} h" + (f", {'; '.join(notes)})" if notes else ")")
 
     def submit(self, week: Week, store: dict) -> str:
         self._open_week(week)
         page = self.page
         if page.get_by_role("button", name="Remove approval").is_enabled():
+            self._capture(week)
             return "already approved"
         approve = page.get_by_role("button", name="Approve", exact=True)
         if not approve.is_enabled():
@@ -168,7 +173,30 @@ class KronosPlatform(Platform):
             pass  # no confirmation step
         expect(page.get_by_role("button", name="Remove approval")).to_be_enabled(timeout=60_000)
         self._raise_errors()
+        self._capture(week)  # replaces the earlier picture: the shared one shows the approved week
         return "approved"
+
+    def screenshot(self, week: Week) -> Path:
+        self._open_week(week)
+        path = self._capture(week)
+        if path is None:
+            raise PlatformError("couldn't save the timecard screenshot")
+        return path
+
+    def _capture(self, week: Week) -> Path | None:
+        """Save a picture of the week's timecard as it stands. A failure here never fails the run."""
+        page = self.page
+        try:
+            page.keyboard.press("Escape")  # nothing open in front of the grid
+            page.wait_for_timeout(1000)
+            path = self.screenshot_path(week)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(path))
+        except (PlaywrightError, OSError) as exc:
+            self.log.warning("! Couldn't save the timecard screenshot: %s", str(exc).splitlines()[0])
+            return None
+        self.log.info("  Screenshot saved: %s", path)
+        return path
 
     # Steps
 

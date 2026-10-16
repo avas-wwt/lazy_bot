@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from playwright.sync_api import expect
 
 from ..config import PROJECT_DIR
@@ -15,6 +17,8 @@ class FakePlatform(Platform):
     name = "fake"
     title = "Fake timesheet"
     supports_rehearsal = True
+    supports_screenshot = True
+    screenshot_name = "fake-timesheet"
 
     @property
     def url(self) -> str:
@@ -54,3 +58,10 @@ class FakePlatform(Platform):
         page.locator("#submit").click()
         expect(page.locator("#status")).to_have_text("Submitted")
         return "submitted"
+
+    def screenshot(self, week: Week) -> Path:
+        self._open_week(week)
+        path = self.screenshot_path(week)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.page.screenshot(path=str(path))
+        return path

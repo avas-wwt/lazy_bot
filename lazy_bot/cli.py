@@ -1,4 +1,4 @@
-"""Command line: python -m lazy_bot check | login | run | inspect."""
+"""Command line: python -m lazy_bot check | login | run | screenshot | inspect."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from pathlib import Path
 import truststore
 
 from .config import SUBMIT_MODES, ConfigError, Settings, load_settings
-from .platforms import Platform, PlatformError, make_platform
+from .platforms import Platform, PlatformError, adapter_class, make_platform
 from .state import State
-from .timesheet import TimesheetError, TimesheetFile, Week, read_timesheet
+from .timesheet import TimesheetError, TimesheetFile, Week, read_timesheet, week_start
 
 log = logging.getLogger("lazy_bot")
 
@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="fill everything in on the sites but never save or submit (nothing is recorded)")
     run.add_argument("--pause", action="store_true", help="wait for Enter before closing (the scheduled task uses it)")
     run.set_defaults(handler=cmd_run)
+
+    shot = commands.add_parser("screenshot", help="save a picture of a week's timecard, ready to share")
+    shot.add_argument("--week", type=date.fromisoformat, metavar="YYYY-MM-DD",
+                      help="the week that contains this date (default: this week)")
+    shot.add_argument("--platform", action="append", help="only this platform (default: every one that supports it)")
+    shot.set_defaults(handler=cmd_screenshot)
 
     inspect = commands.add_parser("inspect", help="save snapshots of the pages you open in a platform's profile")
     inspect.add_argument("--platform", required=True)
@@ -171,6 +177,37 @@ def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
             session.wait_until_closed()
             session.close()
             print(f"[{platform.name}] Done; the sign-in is kept in {settings.profile_dir(platform.name)}")
+    return 1 if failed else 0
+
+
+def cmd_screenshot(settings: Settings, args: argparse.Namespace) -> int:
+    from .browser import BrowserPool
+
+    names = [name.lower() for name in args.platform or settings.platforms]
+    if not args.platform:
+        names = [name for name in names if adapter_class(name).supports_screenshot]
+    if not names:
+        raise ConfigError("no platform in PLATFORMS takes screenshots (try --platform kronos)")
+    setup_logging()
+    week = Week(week_start(args.week or date.today()), [], [])
+    failed = False
+    with BrowserPool(settings) as pool:
+        for name in names:
+            platform = make_platform(settings, name, {})
+            if not platform.supports_screenshot:
+                print(f"[{platform.name}] {platform.title} doesn't take screenshots.")
+                failed = True
+                continue
+            try:
+                platform.session = pool.open(platform)
+                platform.login()
+                print(f"[{platform.name}] {platform.screenshot(week)}")
+            except (ConfigError, PlatformError) as exc:
+                print(f"[{platform.name}] {exc}")
+                failed = True
+            finally:
+                if platform.session is not None:
+                    platform.session.close()
     return 1 if failed else 0
 
 

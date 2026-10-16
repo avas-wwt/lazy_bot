@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from ..config import PlatformSettings, Settings
@@ -26,6 +27,8 @@ class Platform:
     uses_browser: ClassVar[bool] = True
     has_draft: ClassVar[bool] = True  # False when writing an entry already submits it (Deel)
     supports_rehearsal: ClassVar[bool] = False  # can fill_week() run with self.rehearsal set?
+    supports_screenshot: ClassVar[bool] = False  # can screenshot() save a picture of a week for sharing?
+    screenshot_name: ClassVar[str] = ""  # file name prefix of those pictures
 
     def __init__(self, settings: PlatformSettings, app: Settings, cache: dict):
         self.settings = settings
@@ -49,6 +52,13 @@ class Platform:
     def describe(self) -> str:
         """What login() found (account, workspace...), shown by `lazy_bot login`. Empty if nothing to say."""
         return ""
+
+    def screenshot_path(self, week: Week) -> Path:
+        return self.app.screenshots_dir / f"{self.screenshot_name}_{week.label}.png"
+
+    def screenshot(self, week: Week) -> Path:
+        """Open the week on the site and save a picture of it, ready to share. Returns the file."""
+        raise PlatformError(f"{self.title} doesn't take screenshots")
 
     def login(self) -> None:
         """Open the site and make sure we're signed in. MFA is always left to the person."""

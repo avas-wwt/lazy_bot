@@ -77,6 +77,7 @@ class Settings:
     headless: bool
     profiles_dir: Path
     archive_dir: Path
+    screenshots_dir: Path
     logs_dir: Path
     state_path: Path
     env: dict[str, str] = field(repr=False)  # never printed: it holds passwords and API keys
@@ -143,6 +144,7 @@ def load_settings(env_file: Path | None = None, overrides: dict[str, str] | None
         headless=parse_bool(get("HEADLESS", "false"), "HEADLESS"),
         profiles_dir=_path(get("PROFILES_DIR"), local / "lazy_bot" / "profiles"),
         archive_dir=_path(get("ARCHIVE_DIR"), PROJECT_DIR / "archive"),
+        screenshots_dir=_path(get("SCREENSHOTS_DIR"), PROJECT_DIR / "screenshots"),
         logs_dir=_path(get("LOGS_DIR"), PROJECT_DIR / "logs"),
         state_path=_path(get("STATE_PATH"), PROJECT_DIR / "state.json"),
         env=env,

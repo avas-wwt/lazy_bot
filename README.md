@@ -51,6 +51,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 .venv\Scripts\python -m lazy_bot run --rehearse --week 2026-10-12  # type it all in, save nothing (try-out)
 .venv\Scripts\python -m lazy_bot run --platform kronos # just one platform
 .venv\Scripts\python -m lazy_bot run --week 2026-10-05 # a specific week, due or not
+.venv\Scripts\python -m lazy_bot screenshot [--week 2026-10-12]  # picture of that week's WWT timecard
 .venv\Scripts\python -m lazy_bot login [--platform X]  # sign in once per platform
 .venv\Scripts\python -m lazy_bot inspect --platform X  # save page snapshots (for writing adapters)
 ```
@@ -83,6 +84,7 @@ It follows WWT's *My Time User Guide*:
 4. **Hours** go on that project line. Kronos fills the Home line itself.
 5. **Description**: each day's description becomes an `Activity Comment` on that day's cell.
 6. **Save**. After your "y", **Approve** (`KRONOS_APPROVE=true`).
+7. **Screenshot for sharing**: the week's timecard is saved as `screenshots/wwt-timecard_<monday>_to_<sunday>.png` after Save, and saved again after Approve, so the final file shows the approved week. `lazy_bot screenshot` makes one on demand (this week, or `--week` any date in another).
 
 ## Safety
 

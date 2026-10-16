@@ -22,6 +22,7 @@ def make_settings(tmp_path: Path):
         base = {
             "CSV_PATH": str(tmp_path / "timesheet.csv"),
             "ARCHIVE_DIR": str(tmp_path / "archive"),
+            "SCREENSHOTS_DIR": str(tmp_path / "screenshots"),
             "LOGS_DIR": str(tmp_path / "logs"),
             "STATE_PATH": str(tmp_path / "state.json"),
             "PROFILES_DIR": str(tmp_path / "profiles"),

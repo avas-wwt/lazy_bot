@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from lazy_bot.browser import BrowserPool, find_edge
+from lazy_bot.cli import main
 from lazy_bot.platforms import PlatformError, make_platform
 from lazy_bot.platforms.fake import FIXTURE
 from lazy_bot.runner import Runner
@@ -100,6 +101,28 @@ def test_deel_login_does_not_retry_a_refused_password(make_settings):
             platform.login()
         session.close()
     assert len(submissions) == 1  # typed once; after a refusal the person takes over
+
+
+def write_env(tmp_path, platforms: str) -> str:
+    env = tmp_path / "shot.env"
+    env.write_text("\n".join([
+        f"PLATFORMS={platforms}", "HEADLESS=true", "LOGIN_TIMEOUT_SECONDS=30",
+        f"PROFILES_DIR='{tmp_path / 'profiles'}'", f"SCREENSHOTS_DIR='{tmp_path / 'shots'}'",
+        "FAKE_EMAIL=me@example.com", "FAKE_PASSWORD=not-a-real-password"]), encoding="utf-8")
+    return str(env)
+
+
+def test_screenshot_command_saves_the_weeks_picture(tmp_path, capsys):
+    assert main(["--env-file", write_env(tmp_path, "fake"), "screenshot", "--week", "2026-10-14"]) == 0
+    png = tmp_path / "shots" / "fake-timesheet_2026-10-12_to_2026-10-18.png"  # named after the week's Monday
+    assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert str(png) in capsys.readouterr().out
+
+
+def test_screenshot_command_says_when_a_platform_cannot(tmp_path, capsys):
+    assert main(["--env-file", write_env(tmp_path, "clockify"), "screenshot", "--platform", "clockify"]) == 1
+    assert "Clockify doesn't take screenshots" in capsys.readouterr().out
+    assert not (tmp_path / "shots").exists()
 
 
 def test_saved_pages_never_contain_passwords(make_settings, tmp_path):

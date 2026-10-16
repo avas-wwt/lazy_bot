@@ -2,6 +2,7 @@
 .env
 timesheet.csv
 archive/
+screenshots/
 logs/
 state.json
 
