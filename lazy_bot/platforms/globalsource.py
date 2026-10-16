@@ -5,9 +5,11 @@ Each worked day is its own submission ("Submit hours on multiple days" with that
 GLOBALSOURCE_DAY_START, end after the day's hours, with the day's description. Days that already have hours in
 Deel are left alone; a different amount there only produces a warning.
 
-Safeguards agreed for Deel: lazy_bot never types your Deel password (you sign in in the window), does nothing
-to look less automated, and if Deel shows any verification step or warning it stops and leaves the window to
-you. Keep GlobalSource manual from then on.
+Sign-in: the email and password from .env are typed on Deel's login page (once per run: if Deel refuses them,
+you take over in the window), and any 2FA step is always yours.
+
+Safeguards for Deel: nothing here tries to look less automated, and if Deel shows a verification challenge or a
+warning, lazy_bot stops and leaves the window to you. Keep GlobalSource manual from then on.
 """
 
 from __future__ import annotations
@@ -45,25 +47,47 @@ class GlobalSourcePlatform(Platform):
     has_draft = False
     supports_rehearsal = True  # fills each day's form up to the review step, then cancels
 
-    # Sign-in (by the person, always)
+    # Sign-in
 
     def login(self) -> None:
         page = self.page
+        self._password_typed = False
         page.goto(self.url, wait_until="domcontentloaded")
         told = False
         deadline = datetime.now() + timedelta(seconds=self.app.login_timeout)
         while not page.get_by_role("heading", name="Time tracking").is_visible():
             self._stop_on_challenge()
-            if "/login" in page.url and not told:
-                self.log.info("[%s] Sign in to Deel in the Edge window (lazy_bot doesn't type Deel passwords); "
+            self._sign_in_step()
+            if "/login" in page.url and not told and self._password_typed:
+                self.log.info("[%s] Signed in with your .env details; finish any 2FA step in the Edge window "
+                              "(waiting up to %d min)...", self.name, round(self.app.login_timeout / 60))
+                told = True
+            elif "/login" in page.url and not told and not self.settings.get("PASSWORD", strip=False):
+                self.log.info("[%s] Sign in to Deel in the Edge window (no GLOBALSOURCE_PASSWORD in .env); "
                               "waiting up to %d min...", self.name, round(self.app.login_timeout / 60))
                 told = True
             if datetime.now() > deadline:
-                raise PlatformError("not signed in to Deel in time (sign in in the Edge window, "
+                raise PlatformError("not signed in to Deel in time (finish signing in in the Edge window, "
                                     "or raise LOGIN_TIMEOUT_SECONDS)")
             page.wait_for_timeout(1000)
         page.get_by_role("button", name="Submit hours").wait_for(timeout=60_000)
         self._stop_on_challenge()
+
+    def _sign_in_step(self) -> None:
+        """Type the .env email and password on Deel's login form, once. Any other screen (2FA...) is the person's."""
+        page = self.page
+        email = page.get_by_role("textbox", name="Email").first
+        password = page.get_by_role("textbox", name="Password").or_(page.locator("input[type=password]")).first
+        if "/login" not in page.url or not (email.is_visible() and password.is_visible()):
+            return
+        wanted = self.settings.get("EMAIL")
+        if wanted and email.input_value().strip().lower() != wanted.lower():
+            email.fill(wanted)
+        secret = self.settings.get("PASSWORD", strip=False)
+        if secret and email.input_value().strip() and not self._password_typed:
+            self._password_typed = True  # once only: if Deel refuses it, you take over
+            password.fill(secret)
+            page.get_by_role("button", name="Log in", exact=True).click()
 
     # The week (called only after the go-ahead, or while rehearsing)
 

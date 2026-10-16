@@ -1,9 +1,11 @@
 """Drives the real Edge (headless) through a whole run against the local fake timesheet."""
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from lazy_bot.browser import BrowserPool, find_edge
-from lazy_bot.platforms import make_platform
+from lazy_bot.platforms import PlatformError, make_platform
 from lazy_bot.platforms.fake import FIXTURE
 from lazy_bot.runner import Runner
 from lazy_bot.snapshots import Snapshotter
@@ -39,6 +41,65 @@ def site_data(settings):
         data = session.page.evaluate("JSON.parse(localStorage.getItem('fake-timesheet'))")
         session.close()
     return data
+
+
+DEEL_LOGIN = """<!doctype html><title>Deel</title><p>Log in</p>
+<label>Email<input aria-label="Email" id="email" value="{prefill}"></label>
+<label>Password<input aria-label="Password" type="password" id="pw"></label>
+<button id="go" onclick="location.href = '{target}?submit=1&email=' + encodeURIComponent(email.value)
+  + '&pw=' + encodeURIComponent(pw.value)">Log in</button>"""
+DEEL_TRACKING = "<!doctype html><title>Deel</title><h1>Time tracking</h1><button>Submit hours</button>"
+
+
+def fake_deel(session, *, accepts: bool, prefill: str = ""):
+    """Serve a stand-in for Deel's login and Time tracking pages; returns the log of login submissions."""
+    submissions: list[dict] = []
+
+    def page(body: str):
+        return {"status": 200, "content_type": "text/html", "body": body}
+
+    def handle(route):
+        url = urlsplit(route.request.url)
+        query = parse_qs(url.query)
+        target = "/time-attendance/contracts" if accepts else "/login"
+        if "submit" in query:
+            submissions.append({"email": query["email"][0], "pw": query["pw"][0]})
+            route.fulfill(**page(DEEL_TRACKING if accepts else DEEL_LOGIN.format(prefill="", target=target)))
+        elif url.path == "/login":
+            route.fulfill(**page(DEEL_LOGIN.format(prefill=prefill, target=target)))
+        else:  # not signed in: Deel sends you to the login page (a script, since Chromium follows a fulfilled
+            # 302 over the real network instead of through this handler)
+            route.fulfill(**page("<!doctype html><script>location.replace('/login')</script>"))
+
+    session.context.route("https://app.deel.com/**", handle)
+    return submissions
+
+
+def test_deel_login_types_the_env_details_once(make_settings):
+    settings = make_settings(HEADLESS="true", LOGIN_TIMEOUT_SECONDS="30", GLOBALSOURCE_EMAIL="me@example.com",
+                             GLOBALSOURCE_PASSWORD="fake-password-1",
+                             GLOBALSOURCE_URL="https://app.deel.com/time-attendance/contracts")
+    platform = make_platform(settings, "globalsource", {})
+    with BrowserPool(settings) as pool:
+        platform.session = session = pool.open(platform)
+        submissions = fake_deel(session, accepts=True, prefill="someone-else@example.com")
+        platform.login()  # lands on Time tracking only if the form was filled and submitted
+        session.close()
+    assert submissions == [{"email": "me@example.com", "pw": "fake-password-1"}]  # wrong prefilled email replaced
+
+
+def test_deel_login_does_not_retry_a_refused_password(make_settings):
+    settings = make_settings(HEADLESS="true", LOGIN_TIMEOUT_SECONDS="6", GLOBALSOURCE_EMAIL="me@example.com",
+                             GLOBALSOURCE_PASSWORD="fake-password-2",
+                             GLOBALSOURCE_URL="https://app.deel.com/time-attendance/contracts")
+    platform = make_platform(settings, "globalsource", {})
+    with BrowserPool(settings) as pool:
+        platform.session = session = pool.open(platform)
+        submissions = fake_deel(session, accepts=False)
+        with pytest.raises(PlatformError, match="not signed in to Deel in time"):
+            platform.login()
+        session.close()
+    assert len(submissions) == 1  # typed once; after a refusal the person takes over
 
 
 def test_saved_pages_never_contain_passwords(make_settings, tmp_path):

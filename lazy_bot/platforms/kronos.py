@@ -129,6 +129,7 @@ class KronosPlatform(Platform):
 
         comment_type = self.settings.get("COMMENT", "Activity Comment")
         to_comment = [e for e in week.worked_days() if e.description] if comment_type else []
+        self._kept = set()  # days whose saved comment differs from the CSV and was left as it is
         if self.rehearsal:
             typed = sum(self._comment(entry, comment_type) for entry in to_comment)
             return f"filled in, not saved ({week.hours_text()} h, {typed} comment(s) typed)"
@@ -138,10 +139,16 @@ class KronosPlatform(Platform):
         added = sum(self._comment(entry, comment_type) for entry in to_comment)
         if added:
             self._save()
-            missing = [str(entry.day) for entry in to_comment if not self._has_comment(entry, comment_type)]
+            missing = [str(entry.day) for entry in to_comment
+                       if entry.day not in self._kept and not self._has_comment(entry, comment_type)]
             if missing:
                 raise PlatformError(f"hours saved, but the comment didn't stick on {', '.join(missing)}")
-        return f"saved ({week.hours_text()} h" + (f", {added} comment(s) added)" if added else ")")
+        notes = []
+        if added:
+            notes.append(f"{added} comment(s) added")
+        if self._kept:
+            notes.append(f"{len(self._kept)} older comment(s) left as they are")
+        return f"saved ({week.hours_text()} h" + (f", {'; '.join(notes)})" if notes else ")")
 
     def submit(self, week: Week, store: dict) -> str:
         self._open_week(week)
@@ -294,6 +301,7 @@ class KronosPlatform(Platform):
         count = _COMMENT_COUNT.search(text)
         if count and count[1] != "0":  # Kronos shows saved notes read-only; don't pile up a second one
             self._close_details()
+            self._kept.add(entry.day)
             self.log.warning("! Kronos already has a different comment on %s; left as it is (edit it there).",
                              entry.day)
             return False

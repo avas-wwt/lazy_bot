@@ -21,7 +21,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 | Clockify | REST API (personal API key) | working (real entry created, re-run changed nothing) |
 | Timesheet Portal (Cloud Decisions UK) | Edge; one timesheet per month: weekly "Save draft", submitted in the week holding the month's last day | working (real draft saved and read back); monthly Submit not yet exercised |
 | WWT Kronos (UKG) | Edge, WWT Okta sign-in, follows the WWT "My Time User Guide" | working (real save with comment, re-run changed nothing); Approve not yet exercised |
-| GlobalSource (Deel) | Edge at app.deel.com (the branded hiring.globalsource.cloud rejects time tracking with "Origin not allowed"); no drafts, so each day is submitted only after your "y"; you always sign in yourself | written and rehearsed up to Deel's review step; first real submission happens on a supervised run |
+| GlobalSource (Deel) | Edge at app.deel.com (the branded hiring.globalsource.cloud rejects time tracking with "Origin not allowed"); no drafts, so each day is submitted only after your "y"; signs in with your .env details, 2FA stays yours | written and rehearsed up to Deel's review step; first real submission happens on a supervised run |
 
 ## Setup (Windows)
 
