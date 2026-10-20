@@ -4,6 +4,11 @@ Each logged day becomes one entry starting at CLOCKIFY_DAY_START. The ids of the
 kept in state.json, so a re-run updates them instead of adding more. Days that already have entries lazy_bot
 didn't create are left alone. Free workspaces allow 30 API requests an hour, so ids are cached and a week
 takes about six requests.
+
+With CLOCKIFY_SUBMIT_APPROVAL=true, the week is then sent for approval after your "y". Clockify's approval
+week starts on the day set in your Clockify profile (Sunday or Monday...), so lazy_bot sends the Clockify week
+that contains its own Monday, then checks the dates Clockify answers with and withdraws the request at once
+if they're not that week.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ from ..timesheet import DayEntry, Week
 from .base import Platform, PlatformError
 
 DEFAULT_API = "https://api.clockify.me/api/v1"
+CACHE_VERSION = "2"  # bump when login() starts caching something new, so old caches refresh once
+WEEKDAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
 _ID = re.compile(r"[0-9a-f]{24}")
 _ID_IN_URL = re.compile(r"projects/([0-9a-f]{24})")
 _REQUIRED = (("forceProjects", "project"), ("forceTasks", "task"), ("forceTags", "tags"),
@@ -49,6 +56,19 @@ def local_day(text: str) -> date:
     return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone().date()
 
 
+def possible_days(text: str) -> set[date]:
+    """The day a Clockify timestamp means: Clockify writes period dates as midnight 'Z' in the owner's own
+    time zone, so accept both readings (UTC date and local date)."""
+    moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return {moment.date(), moment.astimezone().date()}
+
+
+def approval_week(monday: date, week_start: str) -> tuple[date, date]:
+    """The Clockify week (starting on `week_start`, e.g. 'SUNDAY') that contains lazy_bot's Monday."""
+    first = monday - timedelta(days=(monday.weekday() - WEEKDAYS.index(week_start)) % 7)
+    return first, first + timedelta(days=6)
+
+
 class ClockifyPlatform(Platform):
     name = "clockify"
     title = "Clockify"
@@ -75,7 +95,7 @@ class ClockifyPlatform(Platform):
         self._day_start(), self.settings.flag("BILLABLE")  # bad values fail here, before any entry is written
         key = self.settings.require("API_KEY")
         settings_id = hashlib.sha256("|".join([
-            self.api, key, self.settings.get("WORKSPACE_ID"), self.settings.get("PROJECT"),
+            CACHE_VERSION, self.api, key, self.settings.get("WORKSPACE_ID"), self.settings.get("PROJECT"),
             self.settings.get("TASK"), self.settings.get("TAGS"),
         ]).encode()).hexdigest()[:16]
         if self.cache.get("settings_id") == settings_id:
@@ -98,6 +118,8 @@ class ClockifyPlatform(Platform):
             raise ConfigError("this Clockify workspace requires a task: set CLOCKIFY_TASK in .env")
         if rules.get("forceTags") and not tags:
             raise ConfigError("this Clockify workspace requires tags: set CLOCKIFY_TAGS in .env")
+        approvals = rules.get("approvalSettings") or {}
+        week_start = str((user.get("settings") or {}).get("weekStart") or "MONDAY").upper()
         self.cache.clear()
         self.cache.update(
             settings_id=settings_id, user_id=user["id"], user_name=user.get("name") or user.get("email", ""),
@@ -106,6 +128,9 @@ class ClockifyPlatform(Platform):
             task_id=task["id"] if task else None, task_name=task.get("name") if task else None,
             tag_ids=[tag["id"] for tag in tags], required=[name for flag, name in _REQUIRED if rules.get(flag)],
             force_description=bool(rules.get("forceDescription")),
+            approval_enabled=bool(approvals.get("approvalEnabled", rules.get("timeApprovalEnabled"))),
+            approval_period=approvals.get("approvalPeriod") or "WEEKLY",
+            week_start=week_start if week_start in WEEKDAYS else "MONDAY",
         )
 
     def describe(self) -> str:
@@ -117,6 +142,9 @@ class ClockifyPlatform(Platform):
             parts.append(f"task '{cache['task_name']}'")
         parts.append(f"the workspace requires: {', '.join(cache['required'])}" if cache.get("required")
                      else "the workspace requires no extra fields")
+        if cache.get("approval_enabled"):
+            parts.append(f"timesheet approvals are {str(cache.get('approval_period')).lower().replace('_', '-')}, "
+                         f"your Clockify weeks start on {str(cache.get('week_start')).title()}")
         return "; ".join(parts)
 
     def _project(self, workspace_id: str, wanted: str) -> dict:
@@ -190,9 +218,47 @@ class ClockifyPlatform(Platform):
         return None if self.rehearsal else self._call(method, path, **kwargs)
 
     def submit(self, week: Week, store: dict) -> str:
-        self._call("POST", f"/workspaces/{self.cache['workspace_id']}/approval-requests/TIMESHEET",
-                   json={"period": "WEEKLY", "periodStart": f"{week.start.isoformat()}T00:00:00Z"})
-        return "sent for approval"
+        if not self.cache.get("approval_enabled"):
+            return "nothing to send: this workspace doesn't use timesheet approvals"
+        period = self.cache.get("approval_period") or "WEEKLY"
+        if period != "WEEKLY":
+            raise PlatformError(f"this workspace approves {period.lower().replace('_', '-')} periods; "
+                                "lazy_bot only sends weekly approvals so far")
+        first, last = approval_week(week.start, self.cache.get("week_start") or "MONDAY")
+        span = f"{first:%a %d/%m} to {last:%a %d/%m}"
+        if store.get("approval_withdrawn"):
+            raise PlatformError(f"an earlier approval for {span} came back with the wrong dates and was withdrawn; "
+                                "send this week for approval by hand in Clockify")
+        workspace = self.cache["workspace_id"]
+        try:
+            created = self._call("POST", f"/workspaces/{workspace}/approval-requests/TIMESHEET",
+                                 json={"period": "WEEKLY", "periodStart": f"{first.isoformat()}T00:00:00Z"}) or {}
+        except ClockifyHttpError as exc:
+            if exc.status in (400, 409) and re.search(r"already|exist", str(exc), re.I):
+                return f"already sent for approval ({span})"
+            raise
+        request_id = created.get("id")
+        if request_id:
+            store["approval_request_id"] = request_id
+        opened = (created.get("dateRange") or {}).get("start")
+        if opened and first not in possible_days(opened):
+            store["approval_withdrawn"] = True  # never retried automatically
+            self._withdraw(workspace, request_id, opened, first)
+        return f"sent for approval ({span})"
+
+    def _withdraw(self, workspace: str, request_id: str | None, opened: str, wanted: date) -> None:
+        """Clockify opened the wrong week: take the request back and say so."""
+        problem = f"Clockify opened the approval for the week of {opened[:10]} instead of {wanted}"
+        if not request_id:
+            raise PlatformError(f"{problem}, and gave no id to withdraw it with: withdraw it in Clockify by hand")
+        try:
+            self._call("PATCH", f"/workspaces/{workspace}/approval-requests/{request_id}",
+                       json={"state": "WITHDRAWN_SUBMISSION",
+                             "note": "Sent for the wrong week by lazy_bot; withdrawn automatically."})
+        except PlatformError as exc:
+            raise PlatformError(f"{problem}, and lazy_bot couldn't withdraw it ({exc}): withdraw it in Clockify "
+                                "by hand") from exc
+        raise PlatformError(f"{problem}; it was withdrawn again. Send this week for approval by hand in Clockify")
 
     def _day_start(self) -> time:
         try:
@@ -232,9 +298,12 @@ class ClockifyPlatform(Platform):
         if status == 429:
             raise ClockifyHttpError("Clockify's request limit was reached (free workspaces allow 30 an hour); "
                                     "run again later and it will carry on", status)
-        if status in (401, 403):
+        if status == 401:
             raise ClockifyHttpError("Clockify refused the API key; check CLOCKIFY_API_KEY "
                                     "(and CLOCKIFY_API_URL if your workspace is in another region)", status)
+        if status == 403:
+            raise ClockifyHttpError(f"Clockify doesn't let this account do {method} {path.split('?')[0]} (403)",
+                                    status)
         if not response.ok:
             try:
                 detail = response.json().get("message", "")

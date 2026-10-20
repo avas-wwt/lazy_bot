@@ -18,7 +18,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 
 | Platform | How | Status |
 |---|---|---|
-| Clockify | REST API (personal API key) | working (real entry created, re-run changed nothing) |
+| Clockify | REST API (personal API key); after your "y" the week is sent for approval (`CLOCKIFY_SUBMIT_APPROVAL=true`) | entries working; approval request written and tested against a stand-in, first real one pending |
 | Timesheet Portal (Cloud Decisions UK) | Edge; one timesheet per month: weekly "Save draft", submitted in the week holding the month's last day | working (real draft saved and read back); monthly Submit not yet exercised |
 | WWT Kronos (UKG) | Edge, WWT Okta sign-in, follows the WWT "My Time User Guide" | working (real save with comment, re-run changed nothing); Approve not yet exercised |
 | GlobalSource (Deel) | Edge at app.deel.com (the branded hiring.globalsource.cloud rejects time tracking with "Origin not allowed"); no drafts, so each day is submitted only after your "y"; signs in with your .env details, 2FA stays yours | written and rehearsed up to Deel's review step; first real submission happens on a supervised run |
@@ -52,6 +52,7 @@ Every Friday at 16:00 a scheduled task runs these steps:
 .venv\Scripts\python -m lazy_bot run --platform kronos # just one platform
 .venv\Scripts\python -m lazy_bot run --week 2026-10-05 # a specific week, due or not
 .venv\Scripts\python -m lazy_bot screenshot [--week 2026-10-12]  # picture of that week's WWT timecard
+.venv\Scripts\python -m lazy_bot submit --week 2026-10-12 --platform clockify  # send an already-filled week (asks first)
 .venv\Scripts\python -m lazy_bot login [--platform X]  # sign in once per platform
 .venv\Scripts\python -m lazy_bot inspect --platform X  # save page snapshots (for writing adapters)
 ```
@@ -85,6 +86,14 @@ It follows WWT's *My Time User Guide*:
 5. **Description**: each day's description becomes an `Activity Comment` on that day's cell.
 6. **Save**. After your "y", **Approve** (`KRONOS_APPROVE=true`).
 7. **Screenshot for sharing**: the week's timecard is saved as `screenshots/wwt-timecard_<monday>_to_<sunday>.png` after Save, and saved again after Approve, so the final file shows the approved week. `lazy_bot screenshot` makes one on demand (this week, or `--week` any date in another).
+
+## Clockify approval
+
+With `CLOCKIFY_SUBMIT_APPROVAL=true`, after your "y" each run sends the week for approval:
+1. **Which week:** Clockify's approval week starts on the day set in your Clockify profile (Sunday, Monday...). lazy_bot sends the Clockify week that contains its own Monday, so a Sunday-start profile sends Sun 11/10 to Sat 17/10 for the work week Mon 12/10 to Fri 16/10.
+2. **Check:** Clockify answers with the dates it opened. If they aren't that week, lazy_bot withdraws the request at once, stops with an error, and never retries that week by itself.
+3. **Already sent:** a week Clockify already has counts as done, and a workspace that doesn't use approvals gets nothing sent.
+4. **A week you filled earlier:** to send it on its own, use `lazy_bot submit --week <any date in it> --platform clockify`. It asks before sending.
 
 ## Safety
 

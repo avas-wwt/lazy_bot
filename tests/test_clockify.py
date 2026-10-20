@@ -6,8 +6,8 @@ import pytest
 
 from lazy_bot.config import ConfigError
 from lazy_bot.platforms.base import PlatformError
-from lazy_bot.platforms.clockify import DEFAULT_API, ClockifyPlatform, local_day, utc_text
-from lazy_bot.timesheet import read_timesheet
+from lazy_bot.platforms.clockify import DEFAULT_API, ClockifyPlatform, approval_week, local_day, utc_text
+from lazy_bot.timesheet import Week, read_timesheet
 
 
 class Response:
@@ -25,11 +25,16 @@ class Response:
 class FakeClockify:
     """Just enough of the Clockify API for the adapter, kept in memory."""
 
-    def __init__(self, *, force_projects=False, limit=None):
+    def __init__(self, *, force_projects=False, limit=None, week_start=None, approvals=None, approval_reply=None):
         self.entries: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
         self.force_projects = force_projects
         self.limit = limit
+        self.week_start = week_start  # the user's Clockify profile setting, e.g. "SUNDAY"
+        self.approvals = approvals  # workspace approval settings, e.g. {"approvalEnabled": True, ...}
+        self.approval_reply = approval_reply  # body -> Response; default: echo the period start as Clockify does
+        self.approval_posts: list[dict] = []
+        self.withdrawals: list[tuple[str, str]] = []
         self._next_id = 1
 
     def request(self, method, url, headers=None, timeout=None, params=None, json=None):
@@ -39,10 +44,26 @@ class FakeClockify:
         if self.limit is not None and len(self.calls) > self.limit:
             return Response(429, {"message": "Too many requests"})
         if (method, path) == ("GET", "/user"):
-            return Response(data={"id": "u1", "name": "Pat", "activeWorkspace": "w1", "defaultWorkspace": "w1"})
+            user = {"id": "u1", "name": "Pat", "activeWorkspace": "w1", "defaultWorkspace": "w1"}
+            if self.week_start:
+                user["settings"] = {"weekStart": self.week_start, "timeZone": "America/Sao_Paulo"}
+            return Response(data=user)
         if (method, path) == ("GET", "/workspaces/w1"):
-            return Response(data={"id": "w1", "name": "Acme",
-                                  "workspaceSettings": {"forceProjects": self.force_projects}})
+            rules = {"forceProjects": self.force_projects}
+            if self.approvals:
+                rules["approvalSettings"] = self.approvals
+            return Response(data={"id": "w1", "name": "Acme", "workspaceSettings": rules})
+        if (method, path) == ("GET", "/workspaces/w1/approval-requests"):
+            return Response(403, {"message": "Forbidden"})  # only approvers may list them
+        if (method, path) == ("POST", "/workspaces/w1/approval-requests/TIMESHEET"):
+            self.approval_posts.append(json)
+            if self.approval_reply:
+                return self.approval_reply(json)
+            return Response(201, {"id": "ar1", "status": {"state": "PENDING"},
+                                  "dateRange": {"start": json["periodStart"], "end": json["periodStart"]}})
+        if method == "PATCH" and path.startswith("/workspaces/w1/approval-requests/"):
+            self.withdrawals.append((path.rsplit("/", 1)[1], json["state"]))
+            return Response(data={"id": path.rsplit("/", 1)[1], "status": {"state": json["state"]}})
         if (method, path) == ("GET", "/workspaces/w1/projects"):
             return Response(data=[{"id": "p1", "name": "WWT Delivery"}, {"id": "p2", "name": "WWT Delivery (old)"}])
         if (method, path) == ("GET", f"/workspaces/w1/projects/{PROJECT_ID}"):
@@ -207,3 +228,77 @@ def test_rate_limit_says_it_will_carry_on(clockify):
 def test_submit_is_off_unless_asked_for(clockify):
     assert not clockify().needs_submit(None)
     assert clockify(CLOCKIFY_SUBMIT_APPROVAL="true").needs_submit(None)
+
+
+# Weekly approval
+
+WEEKLY = {"approvalEnabled": True, "approvalPeriod": "WEEKLY", "approvalRoles": ["TEAM_MANAGER", "ADMIN"]}
+THIS_WEEK = Week(date(2026, 10, 12), [], [])  # lazy_bot weeks start on Monday
+
+
+def approving(clockify, reply=None, week_start="SUNDAY", approvals=WEEKLY):
+    platform = clockify(api=FakeClockify(week_start=week_start, approvals=approvals, approval_reply=reply),
+                        CLOCKIFY_SUBMIT_APPROVAL="true")
+    platform.login()
+    return platform
+
+
+def test_the_approval_week_follows_the_clockify_profile_week_start():
+    monday = date(2026, 10, 12)
+    assert approval_week(monday, "SUNDAY") == (date(2026, 10, 11), date(2026, 10, 17))
+    assert approval_week(monday, "MONDAY") == (date(2026, 10, 12), date(2026, 10, 18))
+    assert approval_week(monday, "SATURDAY") == (date(2026, 10, 10), date(2026, 10, 16))
+
+
+def test_submit_sends_the_users_clockify_week(clockify):
+    platform = approving(clockify)
+    store = {}
+    assert platform.submit(THIS_WEEK, store) == "sent for approval (Sun 11/10 to Sat 17/10)"
+    assert platform.http.approval_posts == [{"period": "WEEKLY", "periodStart": "2026-10-11T00:00:00Z"}]
+    assert store["approval_request_id"] == "ar1"
+    assert platform.http.withdrawals == []
+    assert "timesheet approvals are weekly, your Clockify weeks start on Sunday" in platform.describe()
+
+
+def test_submit_accepts_the_start_written_as_utc_too(clockify):
+    platform = approving(clockify, reply=lambda body: Response(201, {"id": "ar1", "dateRange": {
+        "start": "2026-10-11T03:00:00Z"}}))  # Sunday 00:00 in Brasília, written in UTC
+    assert platform.submit(THIS_WEEK, {}).startswith("sent for approval")
+    assert platform.http.withdrawals == []
+
+
+def test_a_request_for_the_wrong_week_is_withdrawn_and_never_retried(clockify):
+    platform = approving(clockify, reply=lambda body: Response(201, {"id": "ar9", "dateRange": {
+        "start": "2026-10-04T00:00:00Z"}}))
+    store = {}
+    with pytest.raises(PlatformError, match="week of 2026-10-04 instead of 2026-10-11; it was withdrawn again"):
+        platform.submit(THIS_WEEK, store)
+    assert platform.http.withdrawals == [("ar9", "WITHDRAWN_SUBMISSION")]
+    with pytest.raises(PlatformError, match="send this week for approval by hand"):
+        platform.submit(THIS_WEEK, store)
+    assert len(platform.http.approval_posts) == 1
+
+
+def test_a_week_already_sent_counts_as_done(clockify):
+    platform = approving(clockify, reply=lambda body: Response(400, {
+        "message": "Approval request for this period already exists", "code": 501}))
+    assert platform.submit(THIS_WEEK, {}) == "already sent for approval (Sun 11/10 to Sat 17/10)"
+
+
+def test_a_workspace_without_approvals_gets_nothing_sent(clockify):
+    platform = approving(clockify, approvals={"approvalEnabled": False, "approvalPeriod": "WEEKLY"})
+    assert platform.submit(THIS_WEEK, {}) == "nothing to send: this workspace doesn't use timesheet approvals"
+    assert platform.http.approval_posts == []
+
+
+def test_monthly_approvals_are_not_sent(clockify):
+    platform = approving(clockify, approvals={"approvalEnabled": True, "approvalPeriod": "MONTHLY"})
+    with pytest.raises(PlatformError, match="approves monthly periods"):
+        platform.submit(THIS_WEEK, {})
+    assert platform.http.approval_posts == []
+
+
+def test_a_forbidden_call_is_not_blamed_on_the_api_key(clockify):
+    platform = approving(clockify)
+    with pytest.raises(PlatformError, match=r"doesn't let this account do GET /workspaces/w1/approval-requests \(403\)"):
+        platform._call("GET", "/workspaces/w1/approval-requests")

@@ -1,4 +1,4 @@
-"""Command line: python -m lazy_bot check | login | run | screenshot | inspect."""
+"""Command line: python -m lazy_bot check | login | run | submit | screenshot | inspect."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ import truststore
 
 from .config import SUBMIT_MODES, ConfigError, Settings, load_settings
 from .platforms import Platform, PlatformError, adapter_class, make_platform
-from .state import State
+from .state import SUBMITTED, State
 from .timesheet import TimesheetError, TimesheetFile, Week, read_timesheet, week_start
 
 log = logging.getLogger("lazy_bot")
@@ -64,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="fill everything in on the sites but never save or submit (nothing is recorded)")
     run.add_argument("--pause", action="store_true", help="wait for Enter before closing (the scheduled task uses it)")
     run.set_defaults(handler=cmd_run)
+
+    submit = commands.add_parser("submit", help="send an already-filled week for approval, without filling anything")
+    submit.add_argument("--week", type=date.fromisoformat, metavar="YYYY-MM-DD", required=True,
+                        help="the week that contains this date")
+    submit.add_argument("--platform", action="append", required=True, help="the platform (can be repeated)")
+    submit.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    submit.set_defaults(handler=cmd_submit)
 
     shot = commands.add_parser("screenshot", help="save a picture of a week's timecard, ready to share")
     shot.add_argument("--week", type=date.fromisoformat, metavar="YYYY-MM-DD",
@@ -177,6 +185,46 @@ def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
             session.wait_until_closed()
             session.close()
             print(f"[{platform.name}] Done; the sign-in is kept in {settings.profile_dir(platform.name)}")
+    return 1 if failed else 0
+
+
+def cmd_submit(settings: Settings, args: argparse.Namespace) -> int:
+    """For a week already filled (by an earlier run or by hand): Clockify approval, Kronos Approve, the
+    Timesheet Portal month. Sites without drafts (Deel) have nothing separate to submit."""
+    from .browser import BrowserPool
+
+    week = Week(week_start(args.week), [], [])
+    state = State.load(settings.state_path)
+    setup_logging()
+    failed = False
+    with BrowserPool(settings) as pool:
+        for name in dict.fromkeys(n.lower() for n in args.platform):
+            platform = make_platform(settings, name, state.cache(name))
+            if not platform.has_draft:
+                print(f"[{platform.name}] {platform.title} sends each entry as it is written; nothing separate to submit")
+                failed = True
+                continue
+            if not platform.needs_submit(week):
+                print(f"[{platform.name}] nothing to submit for the week of {week.start} with your current settings")
+                continue
+            question = f"[{platform.name}] {platform.submit_label()} for the week of {week.start} to {week.end}? [y/N] "
+            if not args.yes and not ask_yes_no(question, lambda: time.sleep(0.2)):
+                print(f"[{platform.name}] not submitted")
+                continue
+            record = state.record(week.key, platform.name)
+            try:
+                if platform.uses_browser:
+                    platform.session = pool.open(platform)
+                platform.login()
+                print(f"[{platform.name}] {platform.submit(week, record['data'])}")
+                state.mark(week.key, platform.name, SUBMITTED, record.get("hash", ""))
+            except (ConfigError, PlatformError) as exc:
+                print(f"[{platform.name}] {exc}")
+                failed = True
+            finally:
+                state.save()  # keeps what the adapter noted, e.g. the approval request id
+                if platform.session is not None:
+                    platform.session.close()
     return 1 if failed else 0
 
 
