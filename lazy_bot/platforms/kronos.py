@@ -32,6 +32,23 @@ _COLUMN_FOR_HEADER = """(label) => {
 _ERROR_BUTTON = re.compile(r"^Error\s+(.*?)\s*Close message$", re.S)
 _COMMENT_COUNT = re.compile(r"Comments \[(\d+)\]")
 NOTE_LIMIT = 250  # characters in a Kronos comment note
+# Kronos' note box refuses these: typed, they vanish; pasted, the whole note is thrown away.
+NOTE_REPLACEMENTS = {"/": "-", "\\": "-", "|": "-", "<": "(", ">": ")", "[": "(", "]": ")"}
+
+
+def kronos_note(description: str) -> str:
+    """The description as Kronos will keep it: rejected characters swapped, cut at the note limit."""
+    return "".join(NOTE_REPLACEMENTS.get(ch, ch) for ch in description)[:NOTE_LIMIT]
+
+
+def comment_lines(details_text: str) -> list[str]:
+    """The lines of the Comments section of a cell's details: comment types and their notes."""
+    start = details_text.find("Comments [")
+    if start < 0:
+        return []
+    end = details_text.find("Recent history", start)
+    section = details_text[start:end if end > 0 else None].splitlines()[1:]
+    return [line.strip() for line in section if line.strip()]
 
 
 def _hours(text: str) -> float | None:
@@ -313,21 +330,27 @@ class KronosPlatform(Platform):
     def _has_comment(self, entry: DayEntry, comment_type: str) -> bool:
         _, text = self._details(entry.day)
         self._close_details()
-        return comment_type in text and entry.description[:NOTE_LIMIT] in text
+        return comment_type in text and kronos_note(entry.description) in text
 
     def _comment(self, entry: DayEntry, comment_type: str) -> bool:
         """Give the day's activity cell a `comment_type` comment holding the description. False if nothing to do."""
         page = self.page
-        note_text = entry.description[:NOTE_LIMIT]
-        if len(note_text) < len(entry.description):
+        note_text = kronos_note(entry.description)
+        if len(entry.description) > NOTE_LIMIT:
             self.log.warning("! Kronos notes hold %d characters; the %s description is cut short there.",
                              NOTE_LIMIT, entry.day)
+        if any(ch in NOTE_REPLACEMENTS for ch in entry.description[:NOTE_LIMIT]):
+            self.log.info("  Kronos notes can't hold %s, so the %s note uses %s instead.",
+                          " ".join(NOTE_REPLACEMENTS), entry.day, " ".join(dict.fromkeys(NOTE_REPLACEMENTS.values())))
         details, text = self._details(entry.day)
         if comment_type in text and note_text in text:
             self._close_details()
             return False
+        lines = comment_lines(text)
+        if lines == [comment_type]:  # our comment with an empty note (Kronos threw a note away): add the note
+            return self._add_note(details, entry, note_text)
         count = _COMMENT_COUNT.search(text)
-        if count and count[1] != "0":  # Kronos shows saved notes read-only; don't pile up a second one
+        if lines or (count and count[1] != "0"):  # Kronos shows saved notes read-only; don't pile up a second one
             self._close_details()
             self._kept.add(entry.day)
             self.log.warning("! Kronos already has a different comment on %s; left as it is (edit it there).",
@@ -349,6 +372,32 @@ class KronosPlatform(Platform):
             editor.get_by_role("button", name="Cancel").click()  # rehearsing: show it, keep nothing
         else:
             editor.get_by_role("button", name="Apply").click()
+        editor.wait_for(state="hidden", timeout=15_000)
+        page.wait_for_timeout(800)
+        self._raise_errors()
+        return True
+
+    def _add_note(self, details: Locator, entry: DayEntry, note_text: str) -> bool:
+        """Put the note into an existing comment that has none ("Add note" in its editor)."""
+        page = self.page
+        details.get_by_role("button", name="Comments and notes").filter(visible=True).last.click()
+        # "Delete comment" is in this editor before and after "Add note" (its title text doesn't match reliably)
+        editor = page.get_by_role("dialog").filter(
+            has=page.get_by_role("button", name="Delete comment")).filter(visible=True).first
+        editor.wait_for(timeout=15_000)
+        editor.get_by_role("button", name="Add note", exact=True).click()
+        note = editor.get_by_placeholder(re.compile(r"Type a note")).filter(visible=True).first
+        note.wait_for(timeout=15_000)
+        note.fill(note_text)
+        if self.rehearsal:
+            editor.get_by_role("button", name="Cancel").click()
+        else:
+            update = editor.get_by_role("button", name="Update", exact=True)
+            if update.count() and update.first.is_visible():
+                update.first.click()
+                page.wait_for_timeout(800)
+            if editor.is_visible():
+                editor.get_by_role("button", name="Apply").click()
         editor.wait_for(state="hidden", timeout=15_000)
         page.wait_for_timeout(800)
         self._raise_errors()
