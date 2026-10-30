@@ -1,6 +1,9 @@
 from datetime import date
 
-from lazy_bot.platforms.timesheetportal import TimesheetPortalPlatform, clock, month_ends
+import pytest
+
+from lazy_bot.platforms.base import PlatformError
+from lazy_bot.platforms.timesheetportal import TimesheetPortalPlatform, clock, month_ends, timesheet_row
 from lazy_bot.timesheet import Week
 
 
@@ -27,3 +30,11 @@ def test_week_across_two_months_is_split():
 
 def test_hours_are_written_as_hh_mm():
     assert (clock(480), clock(450), clock(0), clock(1440)) == ("08:00", "07:30", "00:00", "24:00")
+
+
+def test_hour_boxes_row_is_read_from_the_page():
+    # October's boxes were ctlEnd_1_<day - 1>_0, November's ctlEnd_2_<day - 1>_0
+    assert timesheet_row(["ctlEnd_2_0_0", "ctlEnd_2_29_0", "MainContent_btnNextWeek"]) == "2"
+    for ids in ([], ["ctlEnd_1_0_0", "ctlEnd_2_0_0"]):
+        with pytest.raises(PlatformError):
+            timesheet_row(ids)

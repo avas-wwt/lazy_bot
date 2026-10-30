@@ -21,6 +21,7 @@ NOTE_PLACEHOLDER = "[Enter Timesheet Note]"
 NOTE_LIMIT = 500  # characters per day note
 STATUSES = ("Draft", "Submitted", "Partially Approved", "Approved", "Rejected", "Exported", "Cancelled")
 _BLOCKED = re.compile(r"dialogMessage\('([^']*)'")
+_HOUR_BOX = re.compile(r"^ctlEnd_(\d+)_\d+_0$")  # ctlEnd_<row>_<day - 1>_0
 
 
 def month_ends(week: Week) -> list[date]:
@@ -30,6 +31,14 @@ def month_ends(week: Week) -> list[date]:
 
 def clock(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def timesheet_row(box_ids: list[str]) -> str:
+    """The row number in the month's hour box ids. It changes per month: October had ctlEnd_1_..., November ctlEnd_2_..."""
+    rows = {match[1] for match in map(_HOUR_BOX.match, box_ids) if match}
+    if len(rows) != 1:
+        raise PlatformError(f"expected one row of hour boxes on the timesheet, found {len(rows)}")
+    return rows.pop()
 
 
 class TimesheetPortalPlatform(Platform):
@@ -78,7 +87,7 @@ class TimesheetPortalPlatform(Platform):
             if changed and not self.rehearsal:
                 self._save_draft()
                 self._check(year, month, days, week)
-            parts.append(f"{calendar.month_abbr[month]}: {len(changed)} day(s) changed")
+            parts.append(f"{calendar.month_abbr[month]}: {len(changed)} day(s) changed, month total {self._month_total()}")
         verb = "filled in, not saved" if self.rehearsal else "draft saved"
         return f"{verb} ({'; '.join(parts)})"
 
@@ -122,7 +131,8 @@ class TimesheetPortalPlatform(Platform):
         return months
 
     def _open_month(self, year: int, month: int) -> None:
-        """'My timesheets' opens this month's timesheet; Previous/Next walk to the one wanted."""
+        """'My timesheets' opens this month's timesheet; Previous/Next walk to the one wanted, whose hour boxes'
+        row number is read from the page."""
         page = self.page
         page.get_by_role("link", name="My timesheets").click()
         page.wait_for_load_state("domcontentloaded")
@@ -137,10 +147,16 @@ class TimesheetPortalPlatform(Platform):
         shown = caption.inner_text().strip()
         if shown != calendar.month_name[month]:
             raise PlatformError(f"Timesheet Portal shows {shown}, not {calendar.month_name[month]} {year}")
-        page.locator("input[id^=ctlEnd_]").first.wait_for(timeout=60_000)
+        boxes = page.locator("input[id^=ctlEnd_]")
+        boxes.first.wait_for(timeout=60_000)
+        self._row = timesheet_row(boxes.evaluate_all("boxes => boxes.map(box => box.id)"))
 
     def _box(self, day: date):
-        return self.page.locator(f"#ctlEnd_1_{day.day - 1}_0")
+        return self.page.locator(f"#ctlEnd_{self._row}_{day.day - 1}_0")
+
+    def _month_total(self) -> str:
+        total = self.page.locator("[id^=lblTotalHoursForWeek_]").first  # "Timesheet total hours: 172:00"
+        return total.inner_text().rpartition(": ")[2].strip() if total.count() else "?"
 
     def _set_day(self, day: date, entry: DayEntry | None) -> bool:
         """Set the day's hours and note. True when something changed."""
