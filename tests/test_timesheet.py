@@ -41,6 +41,11 @@ def test_unquoted_comma_stays_in_the_description(write_csv):
     assert read_timesheet(path, FORMATS).weeks()[0].days[0].description == "Planning, then reviews"
 
 
+def test_a_dangling_separator_ends_no_description(write_csv):
+    path = write_csv('date,hours,description\n2026-11-03,8,"Vuln reporting, Citadel - Enterprise Patching,"\n')
+    assert read_timesheet(path, FORMATS).weeks()[0].days[0].description == "Vuln reporting, Citadel - Enterprise Patching"
+
+
 @pytest.mark.parametrize("text,minutes", [("8", 480), ("7.5", 450), ("7,5", 450), ("7:30", 450), ("0", 0), ("7.33", 440)])
 def test_hours_formats(text, minutes):
     assert parse_minutes(text) == minutes

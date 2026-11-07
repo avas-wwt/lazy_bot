@@ -247,6 +247,7 @@ def read_timesheet(path: Path, date_formats: Sequence[str]) -> TimesheetFile:
             cells = cells[: width - 1] + [delimiter.join(cells[width - 1 :])]
         cells = cells + [""] * (width - len(cells))
         date_text, hours_text, description = (cells[index[column]].strip() for column in COLUMNS)
+        description = description.rstrip(",; ")  # a separator left dangling at the end
         try:
             day = parse_day(date_text, date_formats)
         except ValueError:

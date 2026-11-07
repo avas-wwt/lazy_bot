@@ -185,7 +185,15 @@ class TimesheetPortalPlatform(Platform):
             note.fill(wanted_note)
             note.press("End")  # the page records a note on key-up, not on input
             changed = True
+        self._close_note()
         return changed
+
+    def _close_note(self) -> None:
+        """The note panel opens beside the day's box and can cover the next day's: close it after each day."""
+        close = self.page.locator("#btnCloseTimesheetNote")
+        if close.is_visible():
+            close.click()
+            expect(self.page.locator("#txtEditNoteMessage")).to_be_hidden(timeout=10_000)
 
     def _save_draft(self) -> None:
         page = self.page

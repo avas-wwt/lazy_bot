@@ -37,8 +37,22 @@ NOTE_REPLACEMENTS = {"/": "-", "\\": "-", "|": "-", "<": "(", ">": ")", "[": "("
 
 
 def kronos_note(description: str) -> str:
-    """The description as Kronos will keep it: rejected characters swapped, cut at the note limit."""
-    return "".join(NOTE_REPLACEMENTS.get(ch, ch) for ch in description)[:NOTE_LIMIT]
+    """The description as Kronos will keep it: rejected characters swapped and, when it's too long, cut after the
+    last whole item (", " or "; " outside brackets) that fits in the note limit."""
+    note = "".join(NOTE_REPLACEMENTS.get(ch, ch) for ch in description)
+    if len(note) <= NOTE_LIMIT:
+        return note
+    depth, cut = 0, None
+    for index, ch in enumerate(note[:NOTE_LIMIT + 1]):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+        elif ch in ",;" and depth == 0 and note[index + 1:index + 2] == " ":
+            cut = index
+    if cut is None:
+        cut = note.rfind(" ", 0, NOTE_LIMIT + 1)  # no whole item fits: at least don't split a word
+    return note[:cut] if cut > 0 else note[:NOTE_LIMIT]
 
 
 def comment_lines(details_text: str) -> list[str]:
@@ -80,6 +94,7 @@ class KronosPlatform(Platform):
 
     def login(self) -> None:
         self._reopened = False
+        self._sent = set()  # sign-in fields already sent this run: each goes once, then the page is yours
         self.page.goto(self.url, wait_until="domcontentloaded")
         self.wait_until_signed_in(self.page.get_by_role("heading", name="My Timecard"), step=self._sign_in_step)
         self.page.get_by_role("button", name="Save").wait_for(timeout=60_000)
@@ -100,16 +115,24 @@ class KronosPlatform(Platform):
             return
         username = page.get_by_role("textbox", name="Username")
         if username.is_visible():
-            if fill_if_empty(username, self.settings.get("EMAIL")):
-                keep = page.get_by_role("checkbox", name="Keep me signed in")
-                if keep.is_visible() and not keep.is_checked():
-                    keep.check(force=True)
-                page.get_by_role("button", name="Next").click()
+            email = self.settings.get("EMAIL")
+            if email and "username" not in self._sent:
+                fill_if_empty(username, email)  # Okta may show it already, remembered from an earlier sign-in
+                if username.input_value().strip().lower() == email.lower():
+                    self._sent.add("username")
+                    keep = page.get_by_role("checkbox", name="Keep me signed in")
+                    if keep.is_visible() and not keep.is_checked():
+                        keep.check(force=True)
+                    page.get_by_role("button", name="Next").click()
             return
         password = page.get_by_role("textbox", name="Password")
         if password.is_visible():
-            if fill_if_empty(password, self.settings.get("PASSWORD", strip=False)):
-                page.get_by_role("button", name="Verify").click()
+            secret = self.settings.get("PASSWORD", strip=False)
+            if secret and "password" not in self._sent:
+                fill_if_empty(password, secret)
+                if password.input_value() == secret:
+                    self._sent.add("password")
+                    page.get_by_role("button", name="Verify").click()
             return
         stay = page.get_by_role("link", name="Stay signed in")
         if stay.is_visible():
