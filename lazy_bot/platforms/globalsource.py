@@ -3,7 +3,8 @@
 Deel has no drafts: a submitted day goes straight to approval, so lazy_bot writes here only after your "y".
 Each worked day is its own submission ("Submit hours on multiple days" with that one day selected): start at
 GLOBALSOURCE_DAY_START, end after the day's hours, with the day's description. Days that already have hours in
-Deel are left alone; a different amount there only produces a warning.
+Deel are left alone; a different amount there only produces a warning. A day Deel marks as a public holiday
+counts as empty: it gets the CSV's hours like any other day.
 
 Sign-in: the email and password from .env are typed on Deel's login page (once per run: if Deel refuses them,
 you take over in the window), and any 2FA step is always yours.
@@ -39,6 +40,16 @@ def ordinal(day: int) -> str:
 def row_label(day: date) -> str:
     """How Deel's table names a day: 'Mon Oct 12th'."""
     return f"{day:%a} {day:%b} {ordinal(day.day)}"
+
+
+def row_hours(text: str) -> float | None:
+    """The hours a day's row in Deel's table shows; None when it has none yet (a public holiday counts as none)."""
+    match = _ROW_HOURS.search(text)
+    if match:
+        return float(match[1])
+    if "No hours worked" in text or "Public holiday" in text:
+        return None
+    return 0.0
 
 
 class GlobalSourcePlatform(Platform):
@@ -136,10 +147,10 @@ class GlobalSourcePlatform(Platform):
         row = self._row(day)
         row.wait_for(timeout=30_000)
         text = row.inner_text()
-        if "No hours worked" in text:
-            return None
-        match = _ROW_HOURS.search(text)
-        return float(match[1]) if match else 0.0
+        hours = row_hours(text)
+        if hours is None and "Public holiday" in text:
+            self.log.info("  Deel marks %s as a public holiday; it gets the CSV's hours like any other day.", day)
+        return hours
 
     def _submit_day(self, entry: DayEntry) -> None:
         page = self.page
@@ -165,8 +176,8 @@ class GlobalSourcePlatform(Platform):
         times = dialog.get_by_role("checkbox", name=re.compile(r"^Submit start and end times"))
         if not times.is_checked():
             times.check()
-        self._type_time(dialog.get_by_role("textbox", name="Start time"), f"{start:%H:%M}")
-        self._type_time(dialog.get_by_role("textbox", name="End time"), f"{end:%H:%M}")
+        self._type_time(dialog.get_by_role("group", name="Start time", exact=True), f"{start:%H:%M}")
+        self._type_time(dialog.get_by_role("group", name="End time", exact=True), f"{end:%H:%M}")
         dialog.get_by_role("textbox", name="Work description (optional)").fill(entry.description)
 
         dialog.get_by_role("button", name="Continue").click()
@@ -183,11 +194,14 @@ class GlobalSourcePlatform(Platform):
         if self.rehearsal:
             review.get_by_role("button", name="Cancel").click()
             review.wait_for(state="hidden", timeout=30_000)
+            self._close(dialog)  # Cancel there only goes back to the first step
             return
         review.get_by_role("button", name="Submit", exact=True).click()
         review.wait_for(state="hidden", timeout=60_000)
         self._stop_on_challenge()
-        expect(self._row(entry.day)).not_to_contain_text("No hours worked", timeout=60_000)
+        self._close(dialog)
+        # the day's row shows its hours (a holiday's row never said "No hours worked", so check for the hours)
+        expect(self._row(entry.day)).to_contain_text(_ROW_HOURS, timeout=60_000)
 
     def _calendar_month(self, dialog: Locator, day: date) -> None:
         label = f"{calendar.month_name[day.month]} {day.year}"
@@ -203,11 +217,26 @@ class GlobalSourcePlatform(Platform):
             self.page.wait_for_timeout(500)
         raise PlatformError(f"Deel's calendar never showed {label}")
 
-    def _type_time(self, box: Locator, value: str) -> None:
-        box.click()
-        box.press("Control+A")
-        box.press_sequentially(value)  # masked hh:mm field: it needs real key presses
-        expect(box).to_have_value(value)
+    def _close(self, dialog: Locator) -> None:
+        """Close the "Submit hours on multiple days" dialog if it's still open (its X; confirm a discard)."""
+        if not dialog.is_visible():
+            return
+        dialog.locator("button.deel-ui__modal__close-button").first.click()
+        try:
+            dialog.wait_for(state="hidden", timeout=10_000)
+        except PlaywrightError:
+            confirm = self.page.get_by_role("dialog").get_by_role("button", name=re.compile(r"^(Discard|Yes|Leave|Close)$"))
+            confirm.first.click(timeout=10_000)
+            dialog.wait_for(state="hidden", timeout=30_000)
+
+    def _type_time(self, field: Locator, value: str) -> None:
+        """Deel's time fields are MUI pickers: an Hours and a Minutes section, filled by typing the digits."""
+        hours, minutes = value.split(":")
+        section = field.get_by_role("spinbutton", name="Hours")
+        section.click()
+        section.press_sequentially(hours + minutes)  # a full Hours section moves on to Minutes by itself
+        expect(section).to_have_attribute("aria-valuenow", str(int(hours)))
+        expect(field.get_by_role("spinbutton", name="Minutes")).to_have_attribute("aria-valuenow", str(int(minutes)))
 
     def _day_start(self):
         try:
