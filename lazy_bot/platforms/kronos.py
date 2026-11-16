@@ -1,7 +1,8 @@
 """WWT Kronos (UKG Pro Workforce Management), My Timecard, following WWT's "My Time User Guide".
 
 For each week: show activities; give every weekday without hours a 0 on the Home line first (the guide's rule
-for holidays and sick days); add the project's PROJECT COST COLLECTION activity line if it isn't there; type
+for holidays and sick days); add the PROJECT COST COLLECTION activity line of the week's project code (see
+activity_query: billing can move to a new code from a given Monday) if it isn't there; type
 each day's hours on that line (Kronos fills the Home line itself); Save. Then attach each day's description
 as an "Activity Comment" and Save again: Kronos drops comments put on hours that aren't saved yet.
 Submitting means clicking Approve, after your "y".
@@ -18,6 +19,7 @@ from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, expect
 
+from ..config import ConfigError
 from ..timesheet import DayEntry, Week
 from .base import Platform, PlatformError, fill_if_empty
 
@@ -53,6 +55,32 @@ def kronos_note(description: str) -> str:
     if cut is None:
         cut = note.rfind(" ", 0, NOTE_LIMIT + 1)  # no whole item fits: at least don't split a word
     return note[:cut] if cut > 0 else note[:NOTE_LIMIT]
+
+
+def activity_query(setting: str, monday: date) -> str:
+    """KRONOS_ACTIVITY_QUERY for the week starting on `monday`. When billing moves to a new project code, the
+    setting adds the Monday each new code starts on after the first code: "10039405*; 2026-11-23: 10039404*"."""
+    first, *changes = [part.strip() for part in setting.split(";")]
+    if not first or ":" in first:
+        raise ConfigError("KRONOS_ACTIVITY_QUERY should start with the code used before any change, "
+                          "e.g. 10039405*; 2026-11-23: 10039404*")
+    query, previous = first, None
+    for change in filter(None, changes):
+        start_text, _, code = (text.strip() for text in change.partition(":"))
+        try:
+            start = date.fromisoformat(start_text)
+        except ValueError:
+            start = None
+        if start is None or not code:
+            raise ConfigError(f"KRONOS_ACTIVITY_QUERY: {change!r} should read YYYY-MM-DD: code")
+        if start.weekday() != 0:
+            raise ConfigError(f"KRONOS_ACTIVITY_QUERY: {start} is a {start:%A}; a new code starts on a Monday")
+        if previous is not None and start <= previous:
+            raise ConfigError("KRONOS_ACTIVITY_QUERY: put the code changes in date order")
+        previous = start
+        if start <= monday:
+            query = code
+    return query
 
 
 def comment_lines(details_text: str) -> list[str]:
@@ -142,6 +170,10 @@ class KronosPlatform(Platform):
     # The week
 
     def fill_week(self, week: Week, store: dict) -> str:
+        setting = self.settings.require("ACTIVITY_QUERY")
+        self._query = activity_query(setting, week.start)  # the project code this week books to
+        if ";" in setting:
+            self.log.info("  project code for this week: %s", self._query)
         self._open_week(week)
         self._close_messages()
         worked = {entry.day: entry for entry in week.worked_days()}
@@ -269,7 +301,7 @@ class KronosPlatform(Platform):
         raise PlatformError(f"the timecard has no {what} line (lines: {', '.join(labels)})")
 
     def _activity_matches(self, label: str) -> bool:
-        code = self.settings.require("ACTIVITY_QUERY").rstrip("*").strip().lower()
+        code = self._query.rstrip("*").strip().lower()
         wanted = self.settings.get("ACTIVITY", "Project Cost Collection").lower()
         return code in label.lower() and wanted in label.lower()
 
@@ -307,7 +339,7 @@ class KronosPlatform(Platform):
         except PlatformError:
             pass
         page = self.page
-        query = self.settings.require("ACTIVITY_QUERY")
+        query = self._query
         wanted = self.settings.get("ACTIVITY", "Project Cost Collection")
         page.get_by_role("button", name="Add activity").click()
         dialog = page.get_by_role("dialog", name="Select Activity")

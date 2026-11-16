@@ -81,7 +81,7 @@ The week is archived and cleared only when **every** platform in `PLATFORMS` has
 It follows WWT's *My Time User Guide*:
 1. **Show activities**, and open the week. Only this week and last week are supported; older weeks are entered by hand.
 2. **Days off**: each weekday up to today with no hours gets a `0` on the **Home** line first (holidays, sick days).
-3. **Activity line**: if missing, it's added with **Add activity**. lazy_bot searches `KRONOS_ACTIVITY_QUERY` (your code + `*`), opens it, and picks the child containing `KRONOS_ACTIVITY` ("Project Cost Collection", never "Non-Billable").
+3. **Activity line**: if missing, it's added with **Add activity**. lazy_bot searches `KRONOS_ACTIVITY_QUERY` (your code + `*`), opens it, and picks the child containing `KRONOS_ACTIVITY` ("Project Cost Collection", never "Non-Billable"). When billing moves to a new code, add the Monday it starts: `KRONOS_ACTIVITY_QUERY=10039405*; 2026-11-23: 10039404*`. Each week books to the code in force on its Monday.
 4. **Hours** go on that project line. Kronos fills the Home line itself.
 5. **Description**: each day's description becomes an `Activity Comment` on that day's cell.
 6. **Save**. After your "y", **Approve** (`KRONOS_APPROVE=true`).

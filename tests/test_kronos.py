@@ -1,4 +1,9 @@
-from lazy_bot.platforms.kronos import NOTE_LIMIT, comment_lines, kronos_note
+from datetime import date
+
+import pytest
+
+from lazy_bot.config import ConfigError
+from lazy_bot.platforms.kronos import NOTE_LIMIT, activity_query, comment_lines, kronos_note
 
 
 def test_notes_swap_the_characters_kronos_refuses():
@@ -27,3 +32,24 @@ def test_comment_lines_read_the_comments_section_of_a_cell():
     assert comment_lines(with_note) == ["Activity Comment", "JHA Daily Stand-up"]
     assert comment_lines("Comments [0]\nRecent history") == []
     assert comment_lines("no comments section here") == []
+
+
+def test_billing_moves_to_a_new_code_from_a_monday():
+    milestone = "10039405*; 2026-11-23: 10039404*"
+    assert activity_query("10039405*", date(2026, 11, 23)) == "10039405*"
+    assert activity_query(milestone, date(2026, 11, 16)) == "10039405*"  # the last week on the old code
+    assert activity_query(milestone, date(2026, 11, 23)) == "10039404*"
+    assert activity_query(milestone + "; 2027-01-04: 10039406*", date(2027, 1, 4)) == "10039406*"
+    assert activity_query(milestone + ";", date(2026, 11, 30)) == "10039404*"  # a stray ; is fine
+
+
+@pytest.mark.parametrize("setting, problem", [
+    ("10039405*; 2026-11-25: 10039404*", "is a Wednesday"),
+    ("10039405*; 23/11/2026: 10039404*", "should read"),
+    ("10039405*; 2026-11-23:", "should read"),
+    ("10039405*; 2026-11-30: 1*; 2026-11-23: 2*", "date order"),
+    ("2026-11-23: 10039404*", "should start with"),
+])
+def test_a_code_change_that_cannot_be_read_is_explained(setting, problem):
+    with pytest.raises(ConfigError, match=problem):
+        activity_query(setting, date(2026, 11, 23))
