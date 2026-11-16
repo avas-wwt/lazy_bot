@@ -5,7 +5,8 @@ kept in state.json, so a re-run updates them instead of adding more. Days that a
 didn't create are left alone. Free workspaces allow 30 API requests an hour, so ids are cached and a week
 takes about six requests.
 
-With CLOCKIFY_SUBMIT_APPROVAL=true, the week is then sent for approval after your "y". Clockify's approval
+With CLOCKIFY_SUBMIT_APPROVAL=true, the week is then sent for approval after your "y"; a week with no hours
+isn't, since there's no timesheet to approve (the contractor's rule for a week off). Clockify's approval
 week starts on the day set in your Clockify profile (Sunday or Monday...), so lazy_bot sends the Clockify week
 that contains its own Monday, then checks the dates Clockify answers with and withdraws the request at once
 if they're not that week.
@@ -80,6 +81,8 @@ class ClockifyPlatform(Platform):
         self.http = requests.Session()
 
     def needs_submit(self, week: Week) -> bool:
+        if week.days and not week.worked_days():
+            return False  # a week off (`lazy_bot submit` passes a week without rows, and still sends)
         return self.settings.flag("SUBMIT_APPROVAL")
 
     def submit_label(self) -> str:

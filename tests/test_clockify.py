@@ -225,9 +225,17 @@ def test_rate_limit_says_it_will_carry_on(clockify):
         clockify(api=FakeClockify(limit=1)).login()
 
 
-def test_submit_is_off_unless_asked_for(clockify):
-    assert not clockify().needs_submit(None)
-    assert clockify(CLOCKIFY_SUBMIT_APPROVAL="true").needs_submit(None)
+def test_submit_is_off_unless_asked_for(clockify, write_csv):
+    week = week_of(write_csv, clockify().app)
+    assert not clockify().needs_submit(week)
+    assert clockify(CLOCKIFY_SUBMIT_APPROVAL="true").needs_submit(week)
+
+
+def test_a_week_off_is_not_sent_for_approval(clockify, write_csv):
+    platform = clockify(CLOCKIFY_SUBMIT_APPROVAL="true")
+    off = "date,hours,description\n" + "".join(f"2026-10-0{day},0,Out sick\n" for day in range(5, 10))
+    assert not platform.needs_submit(week_of(write_csv, platform.app, off))  # nothing worked: nothing to approve
+    assert platform.needs_submit(Week(date(2026, 10, 5), [], []))  # what `lazy_bot submit` passes: still sends
 
 
 # Weekly approval

@@ -93,7 +93,8 @@ With `CLOCKIFY_SUBMIT_APPROVAL=true`, after your "y" each run sends the week for
 1. **Which week:** Clockify's approval week starts on the day set in your Clockify profile (Sunday, Monday...). lazy_bot sends the Clockify week that contains its own Monday, so a Sunday-start profile sends Sun 11/10 to Sat 17/10 for the work week Mon 12/10 to Fri 16/10.
 2. **Check:** Clockify answers with the dates it opened. If they aren't that week, lazy_bot withdraws the request at once, stops with an error, and never retries that week by itself.
 3. **Already sent:** a week Clockify already has counts as done, and a workspace that doesn't use approvals gets nothing sent.
-4. **A week you filled earlier:** to send it on its own, use `lazy_bot submit --week <any date in it> --platform clockify`. It asks before sending.
+4. **A week off:** a week with no hours at all isn't sent, since there's no timesheet to approve. It counts as done.
+5. **A week you filled earlier:** to send it on its own, use `lazy_bot submit --week <any date in it> --platform clockify`. It asks before sending.
 
 ## Safety
 
