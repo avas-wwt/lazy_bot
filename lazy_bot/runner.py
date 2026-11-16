@@ -133,6 +133,11 @@ class Runner:
                                 "Fix it there by hand, or re-run with --force.", p.title)
                 continue
             if not p.has_draft:
+                if not week.worked_days():  # a week off: nothing to write there, so don't even open the site
+                    line.status = "nothing to write (no hours this week)"
+                    self.state.mark(week.key, p.name, SUBMITTED, week.data_hash())
+                    self.state.save()
+                    continue
                 if self.mode == "save":
                     line.status = "skipped (this site has no drafts)"
                 else:

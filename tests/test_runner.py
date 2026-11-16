@@ -145,6 +145,17 @@ def test_no_keeps_drafts_and_never_writes_to_sites_without_drafts(setup, site):
     assert not settings.archive_dir.exists()
 
 
+def test_a_week_off_never_opens_sites_without_drafts(setup, site, write_csv):
+    settings, make = setup
+    write_csv("date,hours,description\n" + "".join(f"2026-10-0{day},0,Out sick\n" for day in range(5, 10)))
+    runner, week = make()
+    assert runner.run_week(week)
+
+    assert not [call for call in site.calls if call[0] == "gamma"]
+    assert statuses(settings) == {"alpha": SUBMITTED, "beta": SAVED, "gamma": SUBMITTED}
+    assert csv_dates(settings) == ["date"]  # the week off is archived and cleared like any other
+
+
 def test_failure_is_isolated_and_the_next_run_only_finishes_what_is_left(setup, site):
     settings, make = setup
     site.failing.add(("alpha", "fill"))
