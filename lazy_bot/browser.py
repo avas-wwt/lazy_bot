@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("lazy_bot.browser")
 VIEWPORT = {"width": 1366, "height": 900}  # UKG switches to a list view below 768 px wide
 BROWSER_MODES = ("launch", "attach")
+# Started from an elevated shell, Edge 157 relaunches itself unelevated in a new process, so the Edge lazy_bot
+# opened quits at once (Playwright's own --disable-features=AutoDeElevate no longer stops it).
+EDGE_ARGS = ("--do-not-de-elevate",)
 SECRET_WORDS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY")
 _TYPED_PASSWORDS = "() => Array.from(document.querySelectorAll('input[type=password]'), i => i.value).filter(Boolean)"
 
@@ -64,7 +67,7 @@ class BrowserSession:
         self.profile_dir = profile_dir
         self.headless = headless
         self.mode = mode
-        self.args = list(args)
+        self.args = [*EDGE_ARGS, *args]
         self.secrets: list[str] = []  # the platform's passwords/keys, never written into saved pages
         self.context: BrowserContext | None = None
         self._page: Page | None = None
