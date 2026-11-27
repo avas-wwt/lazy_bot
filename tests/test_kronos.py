@@ -25,6 +25,19 @@ def test_a_long_note_is_cut_after_the_last_whole_item():
     assert words.endswith("word") and len(words) <= NOTE_LIMIT
 
 
+def test_a_long_note_written_in_sentences_keeps_its_last_whole_sentence():
+    monday = ("Finalized the EPM-349 service-account request process for review. With no EPM-348 notes available, "
+              "the open decisions are listed with a proposed default for each. Prepared backlog stories for sprint "
+              "planning at Bryan's request. Analyzed Automox devices with no recent check-in (398 cases, most of "
+              "them alive in CrowdStrike) and drafted the Automox decommission story Sam asked for.")
+    assert kronos_note(monday).endswith("for sprint planning at Bryan's request.")  # not "...notes available"
+    tuesday = ("Kept troubleshooting Revelio write access after it was granted (HTTPS and SSH both returned 403 until "
+               "the permission was fixed). Answered Bryan and Sim on Automox numbers, explaining the difference "
+               "between agent deployment and patch compliance (48% compliant after policies started).")
+    assert kronos_note(tuesday).endswith("). Answered Bryan and Sim on Automox numbers")  # a later item still wins
+    assert kronos_note("Coverage went from 47.1 to 96.9 " + "percent " * 40).startswith("Coverage went from 47.1 to")
+
+
 def test_comment_lines_read_the_comments_section_of_a_cell():
     empty_note = "Status\nComments [1]\nActivity Comment\nRecent history\nLast edit date:"
     with_note = "Comments [1]\nActivity Comment\nJHA Daily Stand-up\nRecent history"

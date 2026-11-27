@@ -40,7 +40,8 @@ NOTE_REPLACEMENTS = {"/": "-", "\\": "-", "|": "-", "<": "(", ">": ")", "[": "("
 
 def kronos_note(description: str) -> str:
     """The description as Kronos will keep it: rejected characters swapped and, when it's too long, cut after the
-    last whole item (", " or "; " outside brackets) that fits in the note limit."""
+    last whole item that fits in the note limit: a sentence (". ", kept with its full stop) or a list item (", " or
+    "; "), outside brackets."""
     note = "".join(NOTE_REPLACEMENTS.get(ch, ch) for ch in description)
     if len(note) <= NOTE_LIMIT:
         return note
@@ -50,8 +51,11 @@ def kronos_note(description: str) -> str:
             depth += 1
         elif ch == ")":
             depth = max(depth - 1, 0)
-        elif ch in ",;" and depth == 0 and note[index + 1:index + 2] == " ":
-            cut = index
+        elif depth == 0 and note[index + 1:index + 2] == " ":
+            if ch in ",;":
+                cut = index  # the item ends before its separator
+            elif ch == "." and index < NOTE_LIMIT:
+                cut = index + 1  # the sentence keeps its full stop
     if cut is None:
         cut = note.rfind(" ", 0, NOTE_LIMIT + 1)  # no whole item fits: at least don't split a word
     return note[:cut] if cut > 0 else note[:NOTE_LIMIT]
